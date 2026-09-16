@@ -1,0 +1,71 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  @apply bg-neutral-50 text-neutral-900 antialiased;
+  overscroll-behavior-y: none;
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+@layer components {
+  .card {
+    @apply rounded-2xl bg-white shadow-sm border border-neutral-100 p-4;
+  }
+
+  .metric-number {
+    @apply text-metric-lg font-extrabold tracking-tight text-neutral-900;
+  }
+
+  .btn-primary {
+    @apply flex items-center justify-center gap-2 rounded-2xl bg-brand px-5 py-3.5 text-base font-semibold text-white
+      transition active:scale-[0.98] active:bg-brand-600 disabled:opacity-50 disabled:pointer-events-none;
+    min-height: 48px;
+  }
+
+  .btn-secondary {
+    @apply flex items-center justify-center gap-2 rounded-2xl bg-neutral-100 px-5 py-3.5 text-base font-semibold text-neutral-900
+      transition active:scale-[0.98] active:bg-neutral-200 disabled:opacity-50 disabled:pointer-events-none;
+    min-height: 48px;
+  }
+
+  .btn-ghost {
+    @apply flex items-center justify-center gap-2 rounded-2xl px-4 py-2.5 text-sm font-medium text-neutral-600
+      transition active:scale-[0.98] active:bg-neutral-100;
+    min-height: 44px;
+  }
+
+  .input-field {
+    @apply w-full rounded-xl border border-neutral-200 bg-white px-4 py-3 text-base text-neutral-900
+      placeholder:text-neutral-400 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand-100;
+    min-height: 48px;
+  }
+
+  .label {
+    @apply mb-1.5 block text-sm font-medium text-neutral-700;
+  }
+
+  .app-shell {
+    @apply mx-auto flex min-h-screen w-full max-w-app flex-col bg-neutral-50;
+  }
+
+  .screen-padding {
+    @apply px-4 pt-4;
+  }
+
+  .section-title {
+    @apply text-xs font-bold uppercase tracking-wide text-neutral-500;
+  }
+}
