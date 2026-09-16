@@ -1,0 +1,102 @@
+'use client';
+
+import { useEffect, useRef, useState } from 'react';
+import { createClient } from '@/lib/supabase/client';
+import { sendMessageAction } from '@/app/(app)/team/chat/actions';
+import { t } from '@/lib/i18n';
+import type { ChatMessage } from '@/lib/data/chat';
+
+export function ChatRoom({ teamId, currentUserId, initialMessages }: { teamId: string; currentUserId: string; initialMessages: ChatMessage[] }) {
+  const [messages, setMessages] = useState(initialMessages);
+  const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
+
+  useEffect(() => {
+    const supabase = createClient();
+    const channel = supabase
+      .channel(`messages:${teamId}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'messages', filter: `team_id=eq.${teamId}` },
+        async (payload) => {
+          const row = payload.new as ChatMessage;
+          const { data: profile } = await supabase.from('profiles').select('full_name, avatar_url').eq('id', row.user_id).single();
+          setMessages((prev) => [...prev, { ...row, authorName: profile?.full_name || 'Mitglied', authorAvatar: profile?.avatar_url ?? null }]);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [teamId]);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages.length]);
+
+  return (
+    <div className="flex flex-1 flex-col">
+      <div className="flex flex-1 flex-col gap-3 overflow-y-auto px-4 py-3">
+        {messages.length === 0 ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-2 text-center text-neutral-400">
+            <span className="text-3xl">💬</span>
+            <p className="text-sm">{t('chat.empty.title')}</p>
+          </div>
+        ) : (
+          messages.map((m) => {
+            const mine = m.user_id === currentUserId;
+            return (
+              <div key={m.id} className={`flex flex-col ${mine ? 'items-end' : 'items-start'}`}>
+                {!mine && <span className="mb-0.5 px-1 text-[11px] font-medium text-neutral-400">{m.authorName}</span>}
+                <button
+                  type="button"
+                  onClick={() => setReplyTo(m)}
+                  className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-left text-sm ${
+                    mine ? 'bg-brand text-white' : 'bg-white text-neutral-900 shadow-sm'
+                  }`}
+                >
+                  {m.content}
+                </button>
+                <span className="mt-0.5 px-1 text-[10px] text-neutral-400">
+                  {new Date(m.created_at).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              </div>
+            );
+          })
+        )}
+        <div ref={bottomRef} />
+      </div>
+
+      <form
+        ref={formRef}
+        action={async (formData) => {
+          await sendMessageAction(formData);
+          formRef.current?.reset();
+          setReplyTo(null);
+        }}
+        className="flex flex-col gap-2 border-t border-neutral-200 bg-white px-3 py-3"
+      >
+        <input type="hidden" name="teamId" value={teamId} />
+        <input type="hidden" name="replyToId" value={replyTo?.id ?? ''} />
+        {replyTo && (
+          <div className="flex items-center justify-between rounded-lg bg-neutral-100 px-3 py-1.5 text-xs text-neutral-500">
+            <span className="truncate">{t('chat.reply')}: {replyTo.content}</span>
+            <button type="button" onClick={() => setReplyTo(null)} className="ml-2 shrink-0 font-bold">×</button>
+          </div>
+        )}
+        <div className="flex items-center gap-2">
+          <input
+            name="content"
+            placeholder={t('chat.placeholder')}
+            required
+            autoComplete="off"
+            className="input-field flex-1"
+          />
+          <button type="submit" className="btn-primary px-4 py-3">{t('chat.send')}</button>
+        </div>
+      </form>
+    </div>
+  );
+}
