@@ -1,4 +1,3 @@
-import Link from 'next/link';
 import { BackLink } from '@/components/ui/BackLink';
 import { requireAuthUser, getCurrentProfile } from '@/lib/data/profile';
 import { AvatarEditor } from '@/components/profile/AvatarEditor';

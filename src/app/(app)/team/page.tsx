@@ -5,6 +5,7 @@ import { requireAuthUser, getCurrentProfile, getPrimaryTeamMembership } from '@/
 import { getTeamRankingWithProfiles, type RankingPeriod } from '@/lib/data/team';
 import { getTeamChallenges } from '@/lib/data/challenges';
 import { getTeamActivityFeed, renderFeedItem } from '@/lib/data/feed';
+import { getUnreadChatCount } from '@/lib/data/chat';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Avatar } from '@/components/ui/Avatar';
 import { formatGermanDate } from '@/lib/date';
@@ -29,10 +30,11 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
     );
   }
 
-  const [ranking, challenges, feed] = await Promise.all([
+  const [ranking, challenges, feed, unreadChatCount] = await Promise.all([
     getTeamRankingWithProfiles(membership.team_id, period),
     getTeamChallenges(membership.team_id, user.id),
     getTeamActivityFeed(membership.team_id, 15),
+    getUnreadChatCount(membership.team_id),
   ]);
 
   const activeChallenge = challenges.find((c) => new Date(c.ends_at) >= new Date());
@@ -64,9 +66,14 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
       )}
 
       <div className="grid grid-cols-2 gap-3">
-        <Link href="/team/chat" className="btn-secondary">
+        <Link href="/team/chat" className="btn-secondary relative">
           <MessageCircle size={17} strokeWidth={2} />
           {t('chat.title')}
+          {unreadChatCount > 0 && (
+            <span className="ml-0.5 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-brand px-1 text-[10px] font-bold leading-none text-[#00232A]">
+              {unreadChatCount > 9 ? '9+' : unreadChatCount}
+            </span>
+          )}
         </Link>
         <Link href="/team/herausforderungen" className="btn-secondary">
           <Trophy size={17} strokeWidth={2} />

@@ -1,4 +1,3 @@
-import Link from 'next/link';
 import { BackLink } from '@/components/ui/BackLink';
 import { requireTeamAdminMembership } from '@/lib/data/admin';
 import { updateTeamSettingsAction } from './actions';

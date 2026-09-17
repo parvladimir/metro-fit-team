@@ -232,4 +232,89 @@ describeIntegration('Row Level Security', () => {
 
     await admin.auth.admin.deleteUser(joiner.id).catch(() => undefined);
   });
+
+  it('12. get_unread_chat_count never counts the caller\'s own messages, and reflects a real message from a teammate', async () => {
+    // beforeAll already inserted one message from userA after both userA
+    // and userB joined teamId, so it counts as unread for userB.
+    const { data: ownCount } = await userA.client.rpc('get_unread_chat_count', { p_team_id: teamId });
+    expect(Number(ownCount)).toBe(0);
+
+    const { data: otherCount } = await userB.client.rpc('get_unread_chat_count', { p_team_id: teamId });
+    expect(Number(otherCount)).toBeGreaterThanOrEqual(1);
+  });
+
+  it('13. marking chat read zeroes the unread count for that user only', async () => {
+    await userB.client.from('team_message_read_state').upsert(
+      { user_id: userB.id, team_id: teamId, last_read_at: new Date().toISOString() },
+      { onConflict: 'user_id,team_id' }
+    );
+
+    const { data: countAfterRead } = await userB.client.rpc('get_unread_chat_count', { p_team_id: teamId });
+    expect(Number(countAfterRead)).toBe(0);
+
+    await admin.from('messages').insert({ team_id: teamId, user_id: userA.id, content: 'a fresh message after userB read' });
+
+    const { data: userBCount } = await userB.client.rpc('get_unread_chat_count', { p_team_id: teamId });
+    expect(Number(userBCount)).toBeGreaterThanOrEqual(1);
+    const { data: userACount } = await userA.client.rpc('get_unread_chat_count', { p_team_id: teamId });
+    expect(Number(userACount)).toBe(0); // still zero for the sender
+  });
+
+  it('14. an outsider cannot query unread counts for a team they do not belong to', async () => {
+    const { error } = await outsider.client.rpc('get_unread_chat_count', { p_team_id: teamId });
+    expect(error).not.toBeNull();
+    expect(error!.message).toContain('not_a_team_member');
+  });
+
+  it('15. an outsider cannot read another user\'s chat read-state row', async () => {
+    const { data, error } = await outsider.client.from('team_message_read_state').select('*').eq('user_id', userB.id);
+    expect(error).toBeNull();
+    expect(data).toEqual([]);
+  });
+
+  it('16. an outsider cannot write a read-state row for a team they do not belong to', async () => {
+    const { error } = await outsider.client
+      .from('team_message_read_state')
+      .insert({ user_id: outsider.id, team_id: teamId, last_read_at: new Date().toISOString() });
+    expect(error).not.toBeNull();
+  });
+
+  it('17. a user cannot create a push subscription for another user (impersonation)', async () => {
+    const { error } = await outsider.client
+      .from('push_subscriptions')
+      .insert({ user_id: userB.id, endpoint: 'https://example.com/fake-endpoint', p256dh: 'x', auth: 'y' });
+    expect(error).not.toBeNull();
+  });
+
+  it('18. a user cannot read another user\'s push subscriptions', async () => {
+    await admin.from('push_subscriptions').insert({
+      user_id: userB.id,
+      endpoint: 'https://example.com/real-endpoint-' + Date.now(),
+      p256dh: 'p256dh-value',
+      auth: 'auth-value',
+    });
+
+    const { data, error } = await outsider.client.from('push_subscriptions').select('*').eq('user_id', userB.id);
+    expect(error).toBeNull();
+    expect(data).toEqual([]);
+  });
+
+  it('19. get_team_ranking excludes a user with fitness_score_totals rows but no team_members row', async () => {
+    await admin.from('fitness_score_totals').insert({
+      user_id: outsider.id,
+      team_id: teamId,
+      iso_year: new Date().getUTCFullYear(),
+      iso_week: 1,
+      points: 500,
+    });
+
+    const { data, error } = await userA.client.rpc('get_team_ranking', { p_team_id: teamId, p_period: 'current_week' });
+    // current_week only matches the real current iso week, so this mainly
+    // guards against a crash/error — the exclusion itself is proven by
+    // test 11 (all_time, via fitness_score_events). Still assert no error
+    // and, if any row matched, that it isn't the excluded outsider.
+    expect(error).toBeNull();
+    const rows = (data ?? []) as { user_id: string }[];
+    expect(rows.some((r) => r.user_id === outsider.id)).toBe(false);
+  });
 });

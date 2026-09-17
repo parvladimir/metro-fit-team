@@ -1,4 +1,3 @@
-import Link from 'next/link';
 import { BackLink } from '@/components/ui/BackLink';
 import { createClient } from '@/lib/supabase/server';
 import { requireAuthUser } from '@/lib/data/profile';

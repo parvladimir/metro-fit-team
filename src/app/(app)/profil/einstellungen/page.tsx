@@ -1,4 +1,3 @@
-import Link from 'next/link';
 import { BackLink } from '@/components/ui/BackLink';
 import { createClient } from '@/lib/supabase/server';
 import { requireAuthUser } from '@/lib/data/profile';
@@ -7,7 +6,7 @@ import { ConfirmSubmitButton } from '@/components/ui/ConfirmSubmitButton';
 import { t } from '@/lib/i18n';
 import type { NotificationPreferences } from '@/types/database';
 
-const CATEGORIES = ['trainingserinnerung', 'wochenziel', 'messungserinnerung', 'herausforderung', 'team_aktivitaet', 'wochenzusammenfassung'] as const;
+const CATEGORIES = ['chat_nachrichten', 'trainingserinnerung', 'wochenziel', 'messungserinnerung', 'herausforderung', 'team_aktivitaet', 'wochenzusammenfassung'] as const;
 
 export default async function EinstellungenPage() {
   const user = await requireAuthUser();

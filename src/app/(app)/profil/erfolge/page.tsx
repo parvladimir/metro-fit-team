@@ -1,4 +1,3 @@
-import Link from 'next/link';
 import { BackLink } from '@/components/ui/BackLink';
 import clsx from 'clsx';
 import { Medal, Flame, Timer, Target, Trophy, Dumbbell, Award, type LucideIcon } from 'lucide-react';

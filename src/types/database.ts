@@ -333,6 +333,7 @@ export interface NotificationPreferences {
   herausforderung: boolean;
   team_aktivitaet: boolean;
   wochenzusammenfassung: boolean;
+  chat_nachrichten: boolean;
 }
 
 export interface Achievement {

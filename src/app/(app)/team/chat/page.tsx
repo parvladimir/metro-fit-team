@@ -1,9 +1,9 @@
-import Link from 'next/link';
 import { MessageCircle } from 'lucide-react';
 import { BackLink } from '@/components/ui/BackLink';
 import { requireAuthUser, getPrimaryTeamMembership } from '@/lib/data/profile';
-import { getRecentMessages } from '@/lib/data/chat';
+import { getRecentMessages, getChatLastReadAt } from '@/lib/data/chat';
 import { ChatRoom } from '@/components/chat/ChatRoom';
+import { ChatPushPrompt } from '@/components/chat/ChatPushPrompt';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { t } from '@/lib/i18n';
 
@@ -19,15 +19,27 @@ export default async function ChatPage() {
     );
   }
 
-  const messages = await getRecentMessages(membership.team_id);
+  const [messages, previousReadAt] = await Promise.all([
+    getRecentMessages(membership.team_id),
+    getChatLastReadAt(membership.team_id, user.id),
+  ]);
 
   return (
-    <div className="flex h-[calc(100vh-56px)] flex-col">
-      <div className="flex items-center gap-3 border-b border-neutral-200 bg-neutral-100 px-4 py-3">
+    <div className="-mb-6 flex h-full min-h-0 flex-1 flex-col">
+      <div
+        className="flex shrink-0 items-center gap-3 border-b border-neutral-200 bg-neutral-100 px-4 pb-3"
+        style={{ paddingTop: 'max(0.75rem, calc(env(safe-area-inset-top) + 0.5rem))' }}
+      >
         <BackLink href="/team" />
-        <h1 className="text-lg font-bold text-neutral-900">{membership.team_name}</h1>
+        <h1 className="min-w-0 truncate text-lg font-bold text-neutral-900">{membership.team_name}</h1>
       </div>
-      <ChatRoom teamId={membership.team_id} currentUserId={user.id} initialMessages={messages} />
+      <ChatPushPrompt />
+      <ChatRoom
+        teamId={membership.team_id}
+        currentUserId={user.id}
+        initialMessages={messages}
+        previousReadAt={previousReadAt}
+      />
     </div>
   );
 }

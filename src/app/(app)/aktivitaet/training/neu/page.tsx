@@ -1,4 +1,3 @@
-import Link from 'next/link';
 import { BackLink } from '@/components/ui/BackLink';
 import { createWorkoutAction } from '../../actions';
 import { t } from '@/lib/i18n';
