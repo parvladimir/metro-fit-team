@@ -7,7 +7,7 @@ create or replace function public.preview_team_invite(p_token text)
 returns table (team_name text, valid boolean)
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, extensions
 as $$
 declare
   v_invite public.team_invites%rowtype;

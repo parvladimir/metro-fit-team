@@ -1,8 +1,14 @@
 -- ---------------------------------------------------------------------------
--- redeem_team_invite — the ONLY way a client can join a team. Runs as
--- SECURITY DEFINER so it can insert into team_members (which has no direct
--- client insert policy), but it never trusts anything from the client except
--- the raw invite token itself, which is checked against a stored hash.
+-- Fix: redeem_team_invite() declares `returns table (team_id uuid, ...)`,
+-- which implicitly creates a PL/pgSQL variable named `team_id` in scope for
+-- the whole function body. The membership check then referenced the
+-- unqualified column `team_id` inside a query against team_members, which
+-- Postgres could not resolve between that variable and the table column —
+-- erroring "column reference \"team_id\" is ambiguous" on EVERY redemption
+-- attempt (both first-time joins and the already-a-member case). Discovered
+-- via manual QR-invite testing against the live project — this made the
+-- entire invite feature completely non-functional. Fully qualifying the
+-- column reference fixes it.
 -- ---------------------------------------------------------------------------
 create or replace function public.redeem_team_invite(p_token text)
 returns table (team_id uuid, team_name text, already_member boolean)
@@ -64,5 +70,3 @@ begin
   return query select v_team.id, v_team.name, v_already_member;
 end;
 $$;
-
-grant execute on function public.redeem_team_invite(text) to authenticated;

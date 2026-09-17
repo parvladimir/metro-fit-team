@@ -1,8 +1,14 @@
 -- ---------------------------------------------------------------------------
--- redeem_team_invite — the ONLY way a client can join a team. Runs as
--- SECURITY DEFINER so it can insert into team_members (which has no direct
--- client insert policy), but it never trusts anything from the client except
--- the raw invite token itself, which is checked against a stored hash.
+-- Fix: redeem_team_invite() and preview_team_invite() call digest() from
+-- pgcrypto, but on Supabase projects pgcrypto is installed into the
+-- `extensions` schema, not `public`. Both functions pinned
+-- `set search_path = public`, so `digest()` could not be resolved and every
+-- invite redemption/preview failed with "function digest(text, unknown)
+-- does not exist" — discovered by the RLS integration test suite. Adding
+-- `extensions` to the search_path fixes it without qualifying every call
+-- site. (supabase/migrations/0010 and 0014 are also fixed at the source so
+-- a fresh project never hits this; this migration reconciles a project that
+-- already applied the broken versions.)
 -- ---------------------------------------------------------------------------
 create or replace function public.redeem_team_invite(p_token text)
 returns table (team_id uuid, team_name text, already_member boolean)
@@ -65,4 +71,32 @@ begin
 end;
 $$;
 
-grant execute on function public.redeem_team_invite(text) to authenticated;
+create or replace function public.preview_team_invite(p_token text)
+returns table (team_name text, valid boolean)
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  v_invite public.team_invites%rowtype;
+  v_team_name text;
+begin
+  select * into v_invite from public.team_invites where token_hash = encode(digest(p_token, 'sha256'), 'hex');
+
+  if not found then
+    return query select null::text, false;
+    return;
+  end if;
+
+  select name into v_team_name from public.teams where id = v_invite.team_id;
+
+  if v_invite.revoked_at is not null
+     or (v_invite.expires_at is not null and v_invite.expires_at < now())
+     or (v_invite.max_uses is not null and v_invite.use_count >= v_invite.max_uses) then
+    return query select v_team_name, false;
+    return;
+  end if;
+
+  return query select v_team_name, true;
+end;
+$$;

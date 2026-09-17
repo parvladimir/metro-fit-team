@@ -14,21 +14,37 @@ export function ChatRoom({ teamId, currentUserId, initialMessages }: { teamId: s
 
   useEffect(() => {
     const supabase = createClient();
-    const channel = supabase
-      .channel(`messages:${teamId}`)
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'messages', filter: `team_id=eq.${teamId}` },
-        async (payload) => {
-          const row = payload.new as ChatMessage;
-          const { data: profile } = await supabase.from('profiles').select('full_name, avatar_url').eq('id', row.user_id).single();
-          setMessages((prev) => [...prev, { ...row, authorName: profile?.full_name || 'Mitglied', authorAvatar: profile?.avatar_url ?? null }]);
-        }
-      )
-      .subscribe();
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+    let cancelled = false;
+
+    // IMPORTANT: @supabase/ssr's browser client loads the session from
+    // cookies asynchronously. Subscribing before that resolves opens the
+    // realtime socket unauthenticated, so RLS silently filters out every
+    // change (no error, no events — just nothing arrives, ever). Explicitly
+    // attaching the access token to the realtime client before subscribing
+    // fixes it. Discovered via manual testing: messages saved correctly but
+    // never appeared live, in both dev and production builds.
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (cancelled) return;
+      if (session) supabase.realtime.setAuth(session.access_token);
+
+      channel = supabase
+        .channel(`messages:${teamId}`)
+        .on(
+          'postgres_changes',
+          { event: 'INSERT', schema: 'public', table: 'messages', filter: `team_id=eq.${teamId}` },
+          async (payload) => {
+            const row = payload.new as ChatMessage;
+            const { data: profile } = await supabase.from('profiles').select('full_name, avatar_url').eq('id', row.user_id).single();
+            setMessages((prev) => [...prev, { ...row, authorName: profile?.full_name || 'Mitglied', authorAvatar: profile?.avatar_url ?? null }]);
+          }
+        )
+        .subscribe();
+    });
 
     return () => {
-      supabase.removeChannel(channel);
+      cancelled = true;
+      if (channel) supabase.removeChannel(channel);
     };
   }, [teamId]);
 
