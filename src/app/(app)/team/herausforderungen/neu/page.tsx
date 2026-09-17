@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { BackLink } from '@/components/ui/BackLink';
 import { redirect } from 'next/navigation';
 import { requireAuthUser, getPrimaryTeamMembership } from '@/lib/data/profile';
 import { createChallengeAction } from '../actions';
@@ -18,7 +19,7 @@ export default async function NeueHerausforderungPage() {
   return (
     <div className="screen-padding flex flex-col gap-5 pb-8">
       <div className="flex items-center gap-3">
-        <Link href="/team/herausforderungen" className="text-2xl text-neutral-400">‹</Link>
+        <BackLink href="/team/herausforderungen" />
         <h1 className="text-xl font-bold text-neutral-900">{t('challenge.create')}</h1>
       </div>
 

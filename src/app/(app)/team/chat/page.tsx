@@ -1,4 +1,6 @@
 import Link from 'next/link';
+import { MessageCircle } from 'lucide-react';
+import { BackLink } from '@/components/ui/BackLink';
 import { requireAuthUser, getPrimaryTeamMembership } from '@/lib/data/profile';
 import { getRecentMessages } from '@/lib/data/chat';
 import { ChatRoom } from '@/components/chat/ChatRoom';
@@ -12,7 +14,7 @@ export default async function ChatPage() {
   if (!membership) {
     return (
       <div className="screen-padding pb-4">
-        <EmptyState title={t('team.noTeam.title')} icon="💬" />
+        <EmptyState title={t('team.noTeam.title')} icon={MessageCircle} />
       </div>
     );
   }
@@ -22,7 +24,7 @@ export default async function ChatPage() {
   return (
     <div className="flex h-[calc(100vh-56px)] flex-col">
       <div className="flex items-center gap-3 border-b border-neutral-200 bg-neutral-100 px-4 py-3">
-        <Link href="/team" className="text-2xl text-neutral-400">‹</Link>
+        <BackLink href="/team" />
         <h1 className="text-lg font-bold text-neutral-900">{membership.team_name}</h1>
       </div>
       <ChatRoom teamId={membership.team_id} currentUserId={user.id} initialMessages={messages} />

@@ -198,6 +198,23 @@ describeIntegration('Row Level Security', () => {
     expect(error!.message).toContain('invite_expired');
   });
 
+  it('11. get_team_ranking excludes a user who has score history but is no longer a team_members row (e.g. removed/kicked)', async () => {
+    // outsider has real fitness_score_events for `teamId` (simulating a
+    // former member whose historical score rows were intentionally kept)
+    // but, crucially, no team_members row for that team.
+    await admin.from('fitness_score_events').insert({
+      user_id: outsider.id,
+      team_id: teamId,
+      event_type: 'workout_completed',
+      points: 999,
+    });
+
+    const { data, error } = await userA.client.rpc('get_team_ranking', { p_team_id: teamId, p_period: 'all_time' });
+    expect(error).toBeNull();
+    const rows = (data ?? []) as { user_id: string; points: number }[];
+    expect(rows.some((r) => r.user_id === outsider.id)).toBe(false);
+  });
+
   it('10. an invite cannot be redeemed beyond its max_uses limit', async () => {
     const joiner = await createTestUser('joiner-maxuses');
     const { token } = await createInvite({ max_uses: 1, use_count: 1 });

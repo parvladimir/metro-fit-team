@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { MessageCircle, X } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { sendMessageAction } from '@/app/(app)/team/chat/actions';
 import { Avatar } from '@/components/ui/Avatar';
@@ -58,7 +59,7 @@ export function ChatRoom({ teamId, currentUserId, initialMessages }: { teamId: s
       <div className="flex flex-1 flex-col gap-3 overflow-y-auto px-4 py-3">
         {messages.length === 0 ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-2 text-center text-neutral-400">
-            <span className="text-3xl">💬</span>
+            <MessageCircle size={30} strokeWidth={1.6} />
             <p className="text-sm">{t('chat.empty.title')}</p>
           </div>
         ) : (
@@ -103,7 +104,9 @@ export function ChatRoom({ teamId, currentUserId, initialMessages }: { teamId: s
         {replyTo && (
           <div className="flex items-center justify-between rounded-lg bg-neutral-100 px-3 py-1.5 text-xs text-neutral-500">
             <span className="truncate">{t('chat.reply')}: {replyTo.content}</span>
-            <button type="button" onClick={() => setReplyTo(null)} className="ml-2 shrink-0 font-bold">×</button>
+            <button type="button" onClick={() => setReplyTo(null)} className="btn-icon -mr-1.5 h-6 w-6 shrink-0">
+              <X size={14} strokeWidth={2.25} />
+            </button>
           </div>
         )}
         <div className="flex items-center gap-2">

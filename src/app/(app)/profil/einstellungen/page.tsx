@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { BackLink } from '@/components/ui/BackLink';
 import { createClient } from '@/lib/supabase/server';
 import { requireAuthUser } from '@/lib/data/profile';
 import { updateNotificationPreferencesAction, deleteAccountAction } from '../actions';
@@ -17,7 +18,7 @@ export default async function EinstellungenPage() {
   return (
     <div className="screen-padding flex flex-col gap-5 pb-8">
       <div className="flex items-center gap-3">
-        <Link href="/profil" className="text-2xl text-neutral-400">‹</Link>
+        <BackLink href="/profil" />
         <h1 className="text-xl font-bold text-neutral-900">{t('profile.appSettings')}</h1>
       </div>
 
@@ -43,7 +44,7 @@ export default async function EinstellungenPage() {
       <section className="flex flex-col gap-2">
         <p className="section-title text-red-500">{t('profile.deleteAccount')}</p>
         <form action={deleteAccountAction}>
-          <ConfirmSubmitButton className="btn-ghost w-full bg-red-500/15 text-red-400" confirmMessage={t('profile.deleteAccount.confirm')}>
+          <ConfirmSubmitButton className="btn-destructive w-full" confirmMessage={t('profile.deleteAccount.confirm')}>
             {t('profile.deleteAccount')}
           </ConfirmSubmitButton>
         </form>

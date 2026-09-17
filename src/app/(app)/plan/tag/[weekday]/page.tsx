@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { BackLink } from '@/components/ui/BackLink';
 import { notFound } from 'next/navigation';
 import { requireAuthUser, getCurrentProfile, getPrimaryTeamMembership } from '@/lib/data/profile';
 import { getOrCreateActivePlan, getPlanDay, getExerciseCatalogue } from '@/lib/data/plan';
@@ -23,7 +24,7 @@ export default async function PlanDayPage({ params }: { params: Promise<{ weekda
   return (
     <div className="screen-padding flex flex-col gap-5 pb-8">
       <div className="flex items-center gap-3">
-        <Link href="/plan" className="text-2xl text-neutral-400">‹</Link>
+        <BackLink href="/plan" />
         <h1 className="text-xl font-bold text-neutral-900">{t(`weekday.${weekday}` as TranslationKey)}</h1>
       </div>
 
@@ -49,7 +50,7 @@ export default async function PlanDayPage({ params }: { params: Promise<{ weekda
 
       {day && (
         <form action={deleteDay.bind(null, day.id, weekday)}>
-          <button type="submit" className="btn-ghost text-red-400">{t('plan.removeDay')}</button>
+          <button type="submit" className="btn-destructive">{t('plan.removeDay')}</button>
         </form>
       )}
 
@@ -67,7 +68,7 @@ export default async function PlanDayPage({ params }: { params: Promise<{ weekda
                     </p>
                   </div>
                   <form action={removeExercise.bind(null, pe.id, weekday)}>
-                    <button type="submit" className="btn-ghost px-3 py-2 text-xs text-red-400">{t('common.delete')}</button>
+                    <button type="submit" className="btn-destructive px-3 py-2 text-xs">{t('common.delete')}</button>
                   </form>
                 </div>
               ))

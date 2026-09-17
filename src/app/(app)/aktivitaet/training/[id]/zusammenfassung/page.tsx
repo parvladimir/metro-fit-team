@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { PartyPopper } from 'lucide-react';
 import { requireAuthUser } from '@/lib/data/profile';
 import { getWorkoutDetail, calculateVolumeKg } from '@/lib/data/workouts';
 import { t } from '@/lib/i18n';
@@ -15,7 +16,9 @@ export default async function ZusammenfassungPage({ params }: { params: Promise<
 
   return (
     <div className="screen-padding flex flex-col items-center gap-6 pb-8 text-center">
-      <div className="mt-6 text-5xl">🎉</div>
+      <div className="mt-6 flex h-16 w-16 items-center justify-center rounded-full bg-brand-50 text-brand">
+        <PartyPopper size={30} strokeWidth={1.75} />
+      </div>
       <div>
         <h1 className="text-xl font-bold text-neutral-900">{workout.title || t(`activityType.${workout.activity_type}` as const)}</h1>
         <p className="text-sm text-neutral-500">{t('workout.status.abgeschlossen')}</p>

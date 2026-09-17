@@ -1,4 +1,6 @@
 import Link from 'next/link';
+import { Trophy } from 'lucide-react';
+import { BackLink } from '@/components/ui/BackLink';
 import { requireAuthUser, getPrimaryTeamMembership } from '@/lib/data/profile';
 import { getTeamChallenges } from '@/lib/data/challenges';
 import { joinChallengeAction } from './actions';
@@ -13,7 +15,7 @@ export default async function HerausforderungenPage() {
   if (!membership) {
     return (
       <div className="screen-padding pb-4">
-        <EmptyState title={t('team.noTeam.title')} icon="🏆" />
+        <EmptyState title={t('team.noTeam.title')} icon={Trophy} />
       </div>
     );
   }
@@ -24,7 +26,7 @@ export default async function HerausforderungenPage() {
   return (
     <div className="screen-padding flex flex-col gap-4 pb-4">
       <div className="flex items-center gap-3">
-        <Link href="/team" className="text-2xl text-neutral-400">‹</Link>
+        <BackLink href="/team" />
         <h1 className="text-xl font-bold text-neutral-900">{t('challenge.title')}</h1>
       </div>
 
@@ -33,7 +35,7 @@ export default async function HerausforderungenPage() {
       )}
 
       {challenges.length === 0 ? (
-        <EmptyState title={t('challenge.empty.title')} actionLabel={isAdmin ? t('challenge.empty.action') : undefined} actionHref="/team/herausforderungen/neu" icon="🏆" />
+        <EmptyState title={t('challenge.empty.title')} actionLabel={isAdmin ? t('challenge.empty.action') : undefined} actionHref="/team/herausforderungen/neu" icon={Trophy} />
       ) : (
         <div className="flex flex-col gap-3">
           {challenges.map((c) => (

@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { BackLink } from '@/components/ui/BackLink';
 import { requireTeamAdminMembership } from '@/lib/data/admin';
 import { getTeamInvites, isInviteActive } from '@/lib/data/invites';
 import { revokeInviteAction } from './actions';
@@ -13,7 +14,7 @@ export default async function EinladungenPage() {
   return (
     <div className="screen-padding flex flex-col gap-4 pb-4">
       <div className="flex items-center gap-3">
-        <Link href="/team/verwalten" className="text-2xl text-neutral-400">‹</Link>
+        <BackLink href="/team/verwalten" />
         <h1 className="text-xl font-bold text-neutral-900">{t('invite.title')}</h1>
       </div>
 
@@ -35,7 +36,7 @@ export default async function EinladungenPage() {
               </div>
               {active && (
                 <form action={revokeInviteAction.bind(null, invite.id)}>
-                  <button type="submit" className="btn-ghost px-3 py-2 text-xs text-red-400">{t('invite.revoke')}</button>
+                  <button type="submit" className="btn-destructive shrink-0 px-3 py-2 text-xs">{t('invite.revoke')}</button>
                 </form>
               )}
             </div>

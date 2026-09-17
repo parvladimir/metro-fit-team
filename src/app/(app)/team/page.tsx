@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import clsx from 'clsx';
+import { QrCode, MessageCircle, Trophy, ChevronRight, Users } from 'lucide-react';
 import { requireAuthUser, getCurrentProfile, getPrimaryTeamMembership } from '@/lib/data/profile';
 import { getTeamRankingWithProfiles, type RankingPeriod } from '@/lib/data/team';
 import { getTeamChallenges } from '@/lib/data/challenges';
@@ -21,8 +22,8 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
   if (!membership || !profile) {
     return (
       <div className="screen-padding pb-4">
-        <h1 className="mb-4 text-2xl font-bold text-neutral-900">{t('team.title')}</h1>
-        <EmptyState title={t('team.noTeam.title')} icon="🤝" />
+        <h1 className="mb-4 text-page-title text-neutral-900">{t('team.title')}</h1>
+        <EmptyState title={t('team.noTeam.title')} icon={Users} />
         <p className="mt-3 text-center text-xs text-neutral-400">{t('team.noTeam.description')}</p>
       </div>
     );
@@ -39,10 +40,10 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
 
   return (
     <div className="screen-padding flex flex-col gap-5 pb-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-neutral-900">{membership.team_name}</h1>
+      <div className="flex items-start justify-between gap-3">
+        <h1 className="min-w-0 text-balance text-page-title text-neutral-900">{membership.team_name}</h1>
         {membership.role === 'team_admin' && (
-          <Link href="/team/verwalten" className="btn-ghost bg-neutral-100 text-xs">{t('team.manage')}</Link>
+          <Link href="/team/verwalten" className="btn-ghost mt-0.5 shrink-0 bg-neutral-100 text-xs">{t('team.manage')}</Link>
         )}
       </div>
 
@@ -51,18 +52,26 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
           href="/team/verwalten/einladungen"
           className="card flex items-center gap-3 !py-4 transition active:scale-[0.98]"
         >
-          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-brand-50 text-xl">📲</span>
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-brand-50 text-brand">
+            <QrCode size={20} strokeWidth={1.9} />
+          </span>
           <div className="flex-1">
             <p className="text-sm font-bold text-neutral-900">{t('invite.title')}</p>
             <p className="text-xs text-neutral-400">{t('invite.qrCode')} · {t('invite.copyLink')}</p>
           </div>
-          <span className="text-neutral-300">›</span>
+          <ChevronRight size={18} className="shrink-0 text-neutral-300" />
         </Link>
       )}
 
       <div className="grid grid-cols-2 gap-3">
-        <Link href="/team/chat" className="btn-secondary">💬 {t('chat.title')}</Link>
-        <Link href="/team/herausforderungen" className="btn-secondary">🏆 {t('challenge.title')}</Link>
+        <Link href="/team/chat" className="btn-secondary">
+          <MessageCircle size={17} strokeWidth={2} />
+          {t('chat.title')}
+        </Link>
+        <Link href="/team/herausforderungen" className="btn-secondary">
+          <Trophy size={17} strokeWidth={2} />
+          {t('challenge.title')}
+        </Link>
       </div>
 
       {/* Ranking */}
@@ -72,15 +81,12 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
           {myRankIndex >= 0 && <p className="text-xs font-semibold text-brand">{t('ranking.yourRank')}: #{myRankIndex + 1}</p>}
         </div>
 
-        <div className="mb-3 flex gap-1.5 overflow-x-auto">
+        <div className="scrollbar-hide -mx-1 mb-4 flex gap-2 overflow-x-auto px-1">
           {PERIODS.map((p) => (
             <Link
               key={p}
               href={`/team?period=${p}`}
-              className={clsx(
-                'shrink-0 rounded-full px-3 py-1.5 text-xs font-semibold',
-                p === period ? 'bg-brand text-[#00232A]' : 'bg-neutral-100 text-neutral-500'
-              )}
+              className={clsx('pill', p === period ? 'pill-active' : 'pill-inactive')}
             >
               {t(`ranking.period.${p}` as const)}
             </Link>
@@ -90,19 +96,26 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
         {ranking.every((r) => r.points === 0) ? (
           <p className="py-4 text-center text-sm text-neutral-400">{t('ranking.empty')}</p>
         ) : (
-          <ol className="flex flex-col gap-2">
+          <ol className="flex flex-col gap-1">
             {ranking.map((r, i) => (
               <li
                 key={r.userId}
                 className={clsx(
-                  'flex items-center gap-3 rounded-xl px-2 py-2',
+                  'flex items-center gap-3 rounded-xl px-2 py-2.5',
                   r.userId === user.id && 'bg-brand-50'
                 )}
               >
-                <span className="w-5 text-sm font-bold text-neutral-400">{i + 1}</span>
+                <span
+                  className={clsx(
+                    'flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold tabular-nums',
+                    i < 3 ? 'bg-brand text-[#00232A]' : 'text-neutral-400'
+                  )}
+                >
+                  {i + 1}
+                </span>
                 <Avatar src={r.avatarUrl} name={r.fullName} size="sm" />
                 <span className="flex-1 truncate text-sm font-medium text-neutral-900">{r.fullName}</span>
-                <span className="text-sm font-bold text-neutral-900">{r.points}</span>
+                <span className="text-sm font-bold tabular-nums text-neutral-900">{r.points}</span>
               </li>
             ))}
           </ol>

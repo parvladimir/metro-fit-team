@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import clsx from 'clsx';
+import { Dumbbell, Ruler, ClipboardList, ChevronRight, Lock } from 'lucide-react';
 import { requireAuthUser } from '@/lib/data/profile';
 import { getRecentWorkouts } from '@/lib/data/workouts';
 import { getMeasurementHistory } from '@/lib/data/measurements';
@@ -14,7 +15,7 @@ export default async function AktivitaetPage({ searchParams }: { searchParams: P
 
   return (
     <div className="screen-padding flex flex-col gap-4 pb-4">
-      <h1 className="text-2xl font-bold text-neutral-900">{t('nav.activity')}</h1>
+      <h1 className="text-page-title text-neutral-900">{t('nav.activity')}</h1>
 
       <div className="flex gap-2 rounded-2xl bg-neutral-100 p-1">
         <TabLink href="/aktivitaet?tab=trainings" active={activeTab === 'trainings'} label={t('workout.new')} />
@@ -22,10 +23,19 @@ export default async function AktivitaetPage({ searchParams }: { searchParams: P
       </div>
 
       <div className="grid grid-cols-2 gap-3">
-        <Link href="/aktivitaet/training/neu" className="btn-primary">{t('nav.startWorkout')}</Link>
-        <Link href="/aktivitaet/messung/neu" className="btn-secondary">{t('measurement.add')}</Link>
+        <Link href="/aktivitaet/training/neu" className="btn-primary">
+          <Dumbbell size={17} strokeWidth={2} />
+          {t('nav.startWorkout')}
+        </Link>
+        <Link href="/aktivitaet/messung/neu" className="btn-secondary">
+          <Ruler size={17} strokeWidth={2} />
+          {t('measurement.add')}
+        </Link>
       </div>
-      <Link href="/aktivitaet/protokoll" className="btn-ghost bg-neutral-100">{t('workout.log.title')}</Link>
+      <Link href="/aktivitaet/protokoll" className="btn-ghost w-full bg-neutral-100">
+        <ClipboardList size={16} strokeWidth={2} />
+        {t('workout.log.title')}
+      </Link>
 
       {activeTab === 'trainings' ? <WorkoutList userId={user.id} /> : <MeasurementList userId={user.id} />}
     </div>
@@ -37,7 +47,7 @@ function TabLink({ href, active, label }: { href: string; active: boolean; label
     <Link
       href={href}
       className={clsx(
-        'flex-1 rounded-xl py-2 text-center text-sm font-semibold transition',
+        'flex-1 rounded-xl py-2.5 text-center text-sm font-semibold transition active:scale-[0.98]',
         active ? 'bg-neutral-100 text-neutral-900 shadow-sm' : 'text-neutral-500'
       )}
     >
@@ -50,7 +60,7 @@ async function WorkoutList({ userId }: { userId: string }) {
   const workouts = await getRecentWorkouts(userId);
 
   if (workouts.length === 0) {
-    return <EmptyState title={t('workout.empty.title')} actionLabel={t('workout.empty.action')} actionHref="/aktivitaet/training/neu" icon="🏋️" />;
+    return <EmptyState title={t('workout.empty.title')} actionLabel={t('workout.empty.action')} actionHref="/aktivitaet/training/neu" icon={Dumbbell} />;
   }
 
   return (
@@ -68,7 +78,7 @@ async function WorkoutList({ userId }: { userId: string }) {
               {w.duration_seconds ? ` · ${Math.round(w.duration_seconds / 60)} Min.` : ''}
             </p>
           </div>
-          <span className="text-neutral-300">›</span>
+          <ChevronRight size={18} className="shrink-0 text-neutral-300" />
         </Link>
       ))}
     </div>
@@ -79,12 +89,15 @@ async function MeasurementList({ userId }: { userId: string }) {
   const measurements = await getMeasurementHistory(userId);
 
   if (measurements.length === 0) {
-    return <EmptyState title={t('measurement.empty.title')} actionLabel={t('measurement.empty.action')} actionHref="/aktivitaet/messung/neu" icon="📏" />;
+    return <EmptyState title={t('measurement.empty.title')} actionLabel={t('measurement.empty.action')} actionHref="/aktivitaet/messung/neu" icon={Ruler} />;
   }
 
   return (
     <div className="flex flex-col gap-2.5">
-      <p className="text-xs text-neutral-400">{t('measurement.private.notice')} 🔒</p>
+      <p className="flex items-center gap-1.5 text-xs text-neutral-400">
+        <Lock size={12} strokeWidth={2} />
+        {t('measurement.private.notice')}
+      </p>
       {measurements.map((m) => (
         <div key={m.id} className="card flex items-center justify-between py-3.5">
           <p className="text-sm font-semibold text-neutral-900">{formatGermanDate(m.measured_at)}</p>

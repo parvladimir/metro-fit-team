@@ -11,7 +11,10 @@ export default async function OnboardingPage() {
   }
 
   return (
-    <div className="mx-auto min-h-screen w-full max-w-app px-5 py-8">
+    <div
+      className="mx-auto min-h-screen w-full max-w-app px-5 pb-8"
+      style={{ paddingTop: 'max(2rem, calc(env(safe-area-inset-top) + 1rem))' }}
+    >
       <OnboardingForm userId={user.id} defaultFullName={profile?.full_name || ''} />
     </div>
   );

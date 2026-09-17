@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { Medal, Trophy, Dumbbell, PlusCircle } from 'lucide-react';
 import { getAuthUser, getCurrentProfile, getPrimaryTeamMembership } from '@/lib/data/profile';
 import { getDashboardData } from '@/lib/data/dashboard';
 import { ProgressRing } from '@/components/ui/ProgressRing';
@@ -22,7 +23,7 @@ export default async function DashboardPage() {
 
   return (
     <div className="screen-padding flex flex-col gap-4 pb-4">
-      <h1 className="text-2xl font-bold text-neutral-900">{t('dashboard.greeting', { name: firstName })}</h1>
+      <h1 className="text-page-title text-neutral-900">{t('dashboard.greeting', { name: firstName })}</h1>
 
       {/* DEINE WOCHE — hero ring, Steps-app style: one big friendly number first */}
       <section className="card flex flex-col items-center pt-6 text-center">
@@ -65,7 +66,9 @@ export default async function DashboardPage() {
         {/* DEIN TEAM */}
         <Link href="/team" className="card flex flex-col justify-between transition active:scale-[0.98]">
           <div className="flex items-center gap-2">
-            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-neutral-150 text-base">🏅</span>
+            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-neutral-150 text-neutral-500">
+              <Medal size={16} strokeWidth={1.9} />
+            </span>
             <p className="section-title">{t('dashboard.yourTeam')}</p>
           </div>
           <p className="mt-3 text-3xl font-extrabold tracking-tight text-neutral-900">
@@ -77,7 +80,9 @@ export default async function DashboardPage() {
         {/* HERAUSFORDERUNG */}
         <Link href="/team?tab=herausforderungen" className="card flex flex-col justify-between transition active:scale-[0.98]">
           <div className="flex items-center gap-2">
-            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-neutral-150 text-base">🏆</span>
+            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-neutral-150 text-neutral-500">
+              <Trophy size={16} strokeWidth={1.9} />
+            </span>
             <p className="section-title">{t('dashboard.challenge')}</p>
           </div>
           {data.activeChallenge ? (
@@ -131,8 +136,14 @@ export default async function DashboardPage() {
 
       {/* Quick actions */}
       <section className="grid grid-cols-2 gap-3">
-        <Link href="/aktivitaet/training/neu" className="btn-primary">{t('nav.startWorkout')}</Link>
-        <Link href="/aktivitaet/messung/neu" className="btn-secondary">{t('dashboard.addMeasurement')}</Link>
+        <Link href="/aktivitaet/training/neu" className="btn-primary">
+          <Dumbbell size={17} strokeWidth={2} />
+          {t('nav.startWorkout')}
+        </Link>
+        <Link href="/aktivitaet/messung/neu" className="btn-secondary">
+          <PlusCircle size={17} strokeWidth={2} />
+          {t('dashboard.addMeasurement')}
+        </Link>
       </section>
     </div>
   );

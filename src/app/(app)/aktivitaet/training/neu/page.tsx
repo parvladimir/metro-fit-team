@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { BackLink } from '@/components/ui/BackLink';
 import { createWorkoutAction } from '../../actions';
 import { t } from '@/lib/i18n';
 import type { ActivityType } from '@/types/database';
@@ -13,7 +14,7 @@ export default async function NeuesTrainingPage({ searchParams }: { searchParams
   return (
     <div className="screen-padding flex flex-col gap-5 pb-8">
       <div className="flex items-center gap-3">
-        <Link href="/aktivitaet" className="text-2xl text-neutral-400">‹</Link>
+        <BackLink href="/aktivitaet" />
         <h1 className="text-xl font-bold text-neutral-900">{t('workout.new')}</h1>
       </div>
 

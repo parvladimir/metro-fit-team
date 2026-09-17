@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { BackLink } from '@/components/ui/BackLink';
 import { notFound, redirect } from 'next/navigation';
 import { requireAuthUser, getCurrentProfile, getPrimaryTeamMembership } from '@/lib/data/profile';
 import { getWorkoutDetail, calculateVolumeKg } from '@/lib/data/workouts';
@@ -22,14 +23,14 @@ export default async function TrainingDetailPage({ params }: { params: Promise<{
     <div className="screen-padding flex flex-col gap-5 pb-32">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <Link href="/aktivitaet" className="text-2xl text-neutral-400">‹</Link>
+          <BackLink href="/aktivitaet" />
           <div>
             <h1 className="text-lg font-bold text-neutral-900">{workout.title || t(`activityType.${workout.activity_type}` as const)}</h1>
             <p className="text-xs font-semibold text-brand">{t('workout.status.laeuft')}</p>
           </div>
         </div>
         <form action={discardWorkoutAction.bind(null, workout.id)}>
-          <button type="submit" className="btn-ghost text-xs text-red-500">{t('workout.cancel')}</button>
+          <button type="submit" className="btn-destructive px-3.5 py-2 text-xs">{t('workout.cancel')}</button>
         </form>
       </div>
 
@@ -54,7 +55,9 @@ export default async function TrainingDetailPage({ params }: { params: Promise<{
                       {s.weight_kg ? `${s.weight_kg} kg` : ''} {s.reps ? `× ${s.reps} ${t('workout.reps')}` : ''}
                     </span>
                     <form action={deleteSetAction.bind(null, s.id, workout.id)}>
-                      <button type="submit" className="text-xs font-medium text-red-500">{t('common.delete')}</button>
+                      <button type="submit" className="rounded-lg px-2 py-1 text-xs font-medium text-red-400 transition active:scale-95 active:bg-red-500/10">
+                        {t('common.delete')}
+                      </button>
                     </form>
                   </div>
                 ))}

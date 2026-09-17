@@ -46,23 +46,62 @@ body {
     @apply text-metric-lg font-extrabold tracking-tight text-neutral-900;
   }
 
+  /* Shared shape/behavior for every button variant — proportions tuned for
+     mobile: 46px tap target, tighter tracking so bold labels don't look
+     bloated. `min-w-0` lets the button shrink inside a flex/grid track
+     instead of forcing it wider than its column (the #1 cause of ugly
+     overflow with long German labels), and text is allowed to wrap onto a
+     second line — centered, tight leading — rather than overflowing or
+     being clipped; `break-words` is the last-resort fallback for a single
+     unbreakable long word. */
+  .btn {
+    @apply inline-flex min-w-0 items-center justify-center gap-1.5 text-balance break-words rounded-full px-5 text-center text-[15px]
+      font-semibold leading-tight tracking-[-0.01em] transition active:scale-[0.98]
+      disabled:opacity-50 disabled:pointer-events-none;
+    min-height: 46px;
+  }
+
   .btn-primary {
-    @apply flex items-center justify-center gap-2 rounded-full bg-brand px-5 py-3.5 text-base font-bold text-[#00232A]
-      transition active:scale-[0.98] active:bg-brand-600 disabled:opacity-50 disabled:pointer-events-none;
-    min-height: 48px;
+    @apply btn bg-brand text-[#00232A] active:bg-brand-600;
     box-shadow: 0 8px 20px -6px rgba(0, 215, 245, 0.35);
   }
 
   .btn-secondary {
-    @apply flex items-center justify-center gap-2 rounded-full bg-neutral-150 px-5 py-3.5 text-base font-semibold text-neutral-900
-      transition active:scale-[0.98] active:bg-neutral-200 disabled:opacity-50 disabled:pointer-events-none;
-    min-height: 48px;
+    @apply btn bg-neutral-150 text-neutral-900 active:bg-neutral-200;
   }
 
   .btn-ghost {
-    @apply flex items-center justify-center gap-2 rounded-full px-4 py-2.5 text-sm font-medium text-neutral-500
-      transition active:scale-[0.98] active:bg-neutral-150;
-    min-height: 44px;
+    @apply btn bg-transparent px-4 text-sm font-medium text-neutral-500 active:bg-neutral-150;
+    min-height: 42px;
+    box-shadow: none;
+  }
+
+  .btn-destructive {
+    @apply btn bg-red-500/10 px-4 text-sm font-semibold text-red-400 active:bg-red-500/20;
+    min-height: 42px;
+  }
+
+  /* Icon-only circular button (close/dismiss controls, etc.) — square tap
+     target, no label, so it needs its own compact variant rather than
+     stretching one of the label-first classes above. */
+  .btn-icon {
+    @apply inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-neutral-400
+      transition active:scale-[0.92] active:bg-neutral-150;
+  }
+
+  /* Segmented / pill option — compact selector chip (ranking period tabs,
+     workout-vs-measurement toggle), distinct from the full CTA buttons. */
+  .pill {
+    @apply inline-flex shrink-0 items-center justify-center whitespace-nowrap rounded-full px-3.5 py-2 text-xs font-semibold
+      text-neutral-500 transition active:scale-[0.97];
+  }
+
+  .pill-active {
+    @apply bg-brand text-[#00232A];
+  }
+
+  .pill-inactive {
+    @apply bg-neutral-100;
   }
 
   .input-field {
@@ -81,11 +120,23 @@ body {
   }
 
   .screen-padding {
-    @apply px-4 pt-5;
+    @apply px-4;
+    padding-top: max(1.25rem, calc(env(safe-area-inset-top) + 0.5rem));
   }
 
   .section-title {
     @apply text-xs font-bold uppercase tracking-wide text-neutral-500;
     letter-spacing: 0.08em;
+  }
+
+  /* Horizontally-scrollable chip rows (ranking period tabs, etc.) — keep the
+     native scroll behavior but hide the ugly system scrollbar; the chips
+     themselves are the only affordance needed. */
+  .scrollbar-hide {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
   }
 }

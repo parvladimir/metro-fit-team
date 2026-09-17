@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { BackLink } from '@/components/ui/BackLink';
 import clsx from 'clsx';
 import { requireAuthUser } from '@/lib/data/profile';
 import { getUserAchievements } from '@/lib/data/achievements';
@@ -12,7 +13,7 @@ export default async function ErfolgePage() {
   return (
     <div className="screen-padding flex flex-col gap-4 pb-4">
       <div className="flex items-center gap-3">
-        <Link href="/profil" className="text-2xl text-neutral-400">‹</Link>
+        <BackLink href="/profil" />
         <h1 className="text-xl font-bold text-neutral-900">{t('profile.achievements')}</h1>
       </div>
 

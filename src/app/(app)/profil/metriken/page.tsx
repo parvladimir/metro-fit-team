@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { BackLink } from '@/components/ui/BackLink';
 import { createClient } from '@/lib/supabase/server';
 import { requireAuthUser } from '@/lib/data/profile';
 import { updateMetricPreferencesAction } from '../actions';
@@ -21,7 +22,7 @@ export default async function MetrikenPage() {
   return (
     <div className="screen-padding flex flex-col gap-4 pb-8">
       <div className="flex items-center gap-3">
-        <Link href="/profil" className="text-2xl text-neutral-400">‹</Link>
+        <BackLink href="/profil" />
         <h1 className="text-xl font-bold text-neutral-900">{t('metric.manage')}</h1>
       </div>
       <p className="text-xs text-neutral-500">{t('metric.manage.description')}</p>

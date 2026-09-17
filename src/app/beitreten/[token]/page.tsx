@@ -19,7 +19,10 @@ export default async function BeitretenPage({ params }: { params: Promise<{ toke
   const preview = (Array.isArray(data) ? data[0] : data) as { team_name: string | null; valid: boolean } | null;
 
   return (
-    <div className="mx-auto flex min-h-screen w-full max-w-app flex-col justify-center px-6 py-10">
+    <div
+      className="mx-auto flex min-h-screen w-full max-w-app flex-col justify-center px-6 pb-10"
+      style={{ paddingTop: 'max(2.5rem, calc(env(safe-area-inset-top) + 1rem))' }}
+    >
       <div className="mb-8 flex flex-col items-center gap-2 text-center">
         <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-brand text-2xl font-black text-[#00232A]">
           {appConfig.name.charAt(0)}
