@@ -3,6 +3,7 @@ import { requireTeamAdminMembership } from '@/lib/data/admin';
 import { getTeamRoster } from '@/lib/data/team';
 import { setMemberRoleAction, removeMemberAction } from './actions';
 import { ConfirmSubmitButton } from '@/components/ui/ConfirmSubmitButton';
+import { Avatar } from '@/components/ui/Avatar';
 import { t } from '@/lib/i18n';
 
 export default async function MitgliederPage() {
@@ -19,9 +20,7 @@ export default async function MitgliederPage() {
       <div className="flex flex-col gap-2.5">
         {roster.map((member) => (
           <div key={member.id} className="card flex items-center gap-3 py-3.5">
-            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-neutral-200 text-sm font-bold text-neutral-600">
-              {(member.profile.full_name || '?').charAt(0)}
-            </div>
+            <Avatar src={member.profile.avatar_url} name={member.profile.full_name} size="md" />
             <div className="flex-1">
               <p className="text-sm font-semibold text-neutral-900">{member.profile.full_name}</p>
               <p className="text-xs text-neutral-500">{t(`admin.role.${member.role}` as const)}</p>
@@ -36,7 +35,7 @@ export default async function MitgliederPage() {
                 </form>
                 <form action={removeMemberAction.bind(null, member.id, member.user_id)}>
                   <ConfirmSubmitButton
-                    className="btn-ghost px-3 py-2 text-xs text-red-600"
+                    className="btn-ghost px-3 py-2 text-xs text-red-400"
                     confirmMessage={t('admin.removeMember.confirm', { name: member.profile.full_name || '' })}
                   >
                     {t('admin.removeMember')}

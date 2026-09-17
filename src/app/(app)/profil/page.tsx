@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { getCurrentProfile, getPrimaryTeamMembership } from '@/lib/data/profile';
 import { getProfileStats } from '@/lib/data/stats';
 import { signOutAction } from '@/app/(auth)/actions';
+import { Avatar } from '@/components/ui/Avatar';
 import { t } from '@/lib/i18n';
 
 export default async function ProfilPage() {
@@ -15,22 +16,16 @@ export default async function ProfilPage() {
 
   return (
     <div className="screen-padding flex flex-col gap-5 pb-4">
-      <div className="flex items-center gap-4">
-        <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-full bg-neutral-200 text-2xl font-bold text-neutral-600">
-          {profile.avatar_url ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={profile.avatar_url} alt="" className="h-full w-full object-cover" />
-          ) : (
-            (profile.full_name || '?').charAt(0)
-          )}
-        </div>
-        <div>
+      <Link href="/profil/bearbeiten" className="flex items-center gap-4">
+        <Avatar src={profile.avatar_url} name={profile.full_name} size="lg" />
+        <div className="flex-1">
           <h1 className="text-xl font-bold text-neutral-900">{profile.full_name}</h1>
           {profile.fitness_goal && (
             <p className="text-sm text-neutral-500">{t(`onboarding.goal.${profile.fitness_goal}` as const)}</p>
           )}
+          <p className="mt-0.5 text-xs font-semibold text-brand">{t('profile.editProfile')} ›</p>
         </div>
-      </div>
+      </Link>
 
       <div className="grid grid-cols-3 gap-3">
         <StatCard label={t('profile.weeklyGoal')} value={`${profile.weekly_goal}`} />

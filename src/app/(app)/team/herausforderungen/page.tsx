@@ -59,7 +59,7 @@ export default async function HerausforderungenPage() {
                 <span>{t('challenge.deadline', { date: formatGermanDate(c.ends_at) })}</span>
               </div>
 
-              {c.isCompleted && <p className="mt-2 text-sm font-semibold text-emerald-600">{t('challenge.completed')}</p>}
+              {c.isCompleted && <p className="mt-2 text-sm font-semibold text-emerald-400">{t('challenge.completed')}</p>}
 
               {c.challenge_type === 'individual' && !c.isCompleted && (
                 <form action={joinChallengeAction.bind(null, c.id)} className="mt-3">

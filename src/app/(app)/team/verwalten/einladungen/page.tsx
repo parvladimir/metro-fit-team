@@ -35,7 +35,7 @@ export default async function EinladungenPage() {
               </div>
               {active && (
                 <form action={revokeInviteAction.bind(null, invite.id)}>
-                  <button type="submit" className="btn-ghost px-3 py-2 text-xs text-red-600">{t('invite.revoke')}</button>
+                  <button type="submit" className="btn-ghost px-3 py-2 text-xs text-red-400">{t('invite.revoke')}</button>
                 </form>
               )}
             </div>

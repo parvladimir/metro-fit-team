@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { sendMessageAction } from '@/app/(app)/team/chat/actions';
+import { Avatar } from '@/components/ui/Avatar';
 import { t } from '@/lib/i18n';
 import type { ChatMessage } from '@/lib/data/chat';
 
@@ -64,20 +65,23 @@ export function ChatRoom({ teamId, currentUserId, initialMessages }: { teamId: s
           messages.map((m) => {
             const mine = m.user_id === currentUserId;
             return (
-              <div key={m.id} className={`flex flex-col ${mine ? 'items-end' : 'items-start'}`}>
-                {!mine && <span className="mb-0.5 px-1 text-[11px] font-medium text-neutral-400">{m.authorName}</span>}
-                <button
-                  type="button"
-                  onClick={() => setReplyTo(m)}
-                  className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-left text-sm ${
-                    mine ? 'bg-brand text-white' : 'bg-white text-neutral-900 shadow-sm'
-                  }`}
-                >
-                  {m.content}
-                </button>
-                <span className="mt-0.5 px-1 text-[10px] text-neutral-400">
-                  {new Date(m.created_at).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}
-                </span>
+              <div key={m.id} className={`flex items-end gap-2 ${mine ? 'flex-row-reverse' : 'flex-row'}`}>
+                {!mine && <Avatar src={m.authorAvatar} name={m.authorName} size="sm" />}
+                <div className={`flex flex-col ${mine ? 'items-end' : 'items-start'}`}>
+                  {!mine && <span className="mb-0.5 px-1 text-[11px] font-medium text-neutral-400">{m.authorName}</span>}
+                  <button
+                    type="button"
+                    onClick={() => setReplyTo(m)}
+                    className={`max-w-[70vw] rounded-2xl px-4 py-2.5 text-left text-sm ${
+                      mine ? 'bg-brand text-[#00232A]' : 'bg-neutral-100 text-neutral-900'
+                    }`}
+                  >
+                    {m.content}
+                  </button>
+                  <span className="mt-0.5 px-1 text-[10px] text-neutral-400">
+                    {new Date(m.created_at).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                </div>
               </div>
             );
           })
@@ -92,7 +96,7 @@ export function ChatRoom({ teamId, currentUserId, initialMessages }: { teamId: s
           formRef.current?.reset();
           setReplyTo(null);
         }}
-        className="flex flex-col gap-2 border-t border-neutral-200 bg-white px-3 py-3"
+        className="flex flex-col gap-2 border-t border-neutral-200 bg-neutral-100 px-3 py-3"
       >
         <input type="hidden" name="teamId" value={teamId} />
         <input type="hidden" name="replyToId" value={replyTo?.id ?? ''} />

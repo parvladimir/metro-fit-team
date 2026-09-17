@@ -5,6 +5,10 @@ import { getProgressSeries, type ProgressRange } from '@/lib/data/progress';
 import { ProgressLineChart } from '@/components/dashboard/ProgressLineChart';
 import { t } from '@/lib/i18n';
 
+// Recharts (used only by ProgressLineChart, a 'use client' component) is
+// already its own chunk here since this is the only page that imports it —
+// the dashboard and every other route never pull it in.
+
 const RANGES: ProgressRange[] = ['4w', '8w', '3m', '6m', '1y'];
 const METRICS = [
   { key: 'minutes', label: 'Trainingsminuten', unit: 'Min.' },
@@ -36,7 +40,7 @@ export default async function FortschrittPage({ searchParams }: { searchParams: 
             href={`/profil/fortschritt?range=${range}&metric=${m.key}`}
             className={clsx(
               'shrink-0 rounded-full px-3 py-1.5 text-xs font-semibold',
-              m.key === metric.key ? 'bg-brand text-white' : 'bg-neutral-100 text-neutral-500'
+              m.key === metric.key ? 'bg-brand text-[#00232A]' : 'bg-neutral-100 text-neutral-500'
             )}
           >
             {m.label}
@@ -59,7 +63,7 @@ export default async function FortschrittPage({ searchParams }: { searchParams: 
             href={`/profil/fortschritt?range=${r}&metric=${metric.key}`}
             className={clsx(
               'shrink-0 rounded-full px-3 py-1.5 text-xs font-semibold',
-              r === range ? 'bg-neutral-900 text-white' : 'bg-neutral-100 text-neutral-500'
+              r === range ? 'bg-brand text-[#00232A]' : 'bg-neutral-100 text-neutral-500'
             )}
           >
             {t(`chart.range.${r}` as const)}

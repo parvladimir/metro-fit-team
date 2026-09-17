@@ -91,7 +91,7 @@ export default async function TrainingDetailPage({ params }: { params: Promise<{
       </form>
 
       <div className="fixed bottom-16 left-1/2 z-20 w-full max-w-app -translate-x-1/2 px-4">
-        <div className="flex gap-2 rounded-2xl bg-white p-2 shadow-lg ring-1 ring-neutral-100">
+        <div className="flex gap-2 rounded-2xl bg-neutral-100 p-2 shadow-lg ring-1 ring-neutral-100">
           <form action={skipWorkoutAction.bind(null, workout.id)} className="flex-1">
             <button type="submit" className="btn-secondary w-full">{t('workout.skip')}</button>
           </form>

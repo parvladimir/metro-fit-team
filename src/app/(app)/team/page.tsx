@@ -5,6 +5,7 @@ import { getTeamRankingWithProfiles, type RankingPeriod } from '@/lib/data/team'
 import { getTeamChallenges } from '@/lib/data/challenges';
 import { getTeamActivityFeed, renderFeedItem } from '@/lib/data/feed';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { Avatar } from '@/components/ui/Avatar';
 import { formatGermanDate } from '@/lib/date';
 import { t } from '@/lib/i18n';
 
@@ -78,7 +79,7 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
               href={`/team?period=${p}`}
               className={clsx(
                 'shrink-0 rounded-full px-3 py-1.5 text-xs font-semibold',
-                p === period ? 'bg-brand text-white' : 'bg-neutral-100 text-neutral-500'
+                p === period ? 'bg-brand text-[#00232A]' : 'bg-neutral-100 text-neutral-500'
               )}
             >
               {t(`ranking.period.${p}` as const)}
@@ -99,9 +100,7 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
                 )}
               >
                 <span className="w-5 text-sm font-bold text-neutral-400">{i + 1}</span>
-                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-neutral-200 text-xs font-bold text-neutral-600">
-                  {r.fullName.charAt(0)}
-                </div>
+                <Avatar src={r.avatarUrl} name={r.fullName} size="sm" />
                 <span className="flex-1 truncate text-sm font-medium text-neutral-900">{r.fullName}</span>
                 <span className="text-sm font-bold text-neutral-900">{r.points}</span>
               </li>

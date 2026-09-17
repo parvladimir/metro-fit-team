@@ -15,7 +15,7 @@ export function CreateInviteForm() {
     <div className="card flex flex-col gap-4">
       {state?.link ? (
         <div className="flex flex-col items-center gap-4">
-          <div className="rounded-2xl bg-white p-4 shadow-sm">
+          <div className="rounded-2xl bg-neutral-100 p-4 shadow-sm">
             <QRCodeSVG value={state.link} size={200} />
           </div>
           <p className="text-center text-xs text-neutral-500">{t('invite.scanHint')}</p>
@@ -44,7 +44,7 @@ export function CreateInviteForm() {
               <input name="maxUses" type="number" min={1} className="input-field" />
             </div>
           </div>
-          {state?.error && <p className="text-sm text-red-600">{state.error}</p>}
+          {state?.error && <p className="text-sm text-red-400">{state.error}</p>}
           <SubmitButton>{t('invite.newInvite')}</SubmitButton>
         </form>
       )}

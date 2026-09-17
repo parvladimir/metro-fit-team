@@ -43,7 +43,7 @@ export default async function EinstellungenPage() {
       <section className="flex flex-col gap-2">
         <p className="section-title text-red-500">{t('profile.deleteAccount')}</p>
         <form action={deleteAccountAction}>
-          <ConfirmSubmitButton className="btn-ghost w-full bg-red-50 text-red-600" confirmMessage={t('profile.deleteAccount.confirm')}>
+          <ConfirmSubmitButton className="btn-ghost w-full bg-red-500/15 text-red-400" confirmMessage={t('profile.deleteAccount.confirm')}>
             {t('profile.deleteAccount')}
           </ConfirmSubmitButton>
         </form>
