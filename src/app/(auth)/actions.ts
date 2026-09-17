@@ -1,9 +1,11 @@
 'use server';
 
 import { redirect } from 'next/navigation';
+import { cookies } from 'next/headers';
 import { createClient } from '@/lib/supabase/server';
 import { ensureInitialAdminBootstrap } from '@/lib/server/bootstrap';
 import { publicEnv } from '@/lib/env';
+import { PENDING_INVITE_COOKIE, resolveEffectiveNext } from '@/lib/pending-invite';
 
 export type AuthActionState = { error?: string; success?: string } | undefined;
 
@@ -25,7 +27,9 @@ export async function signInAction(_prev: AuthActionState, formData: FormData): 
 
   await ensureInitialAdminBootstrap(data.user.id, data.user.email);
 
-  redirect(next || '/');
+  const cookieStore = await cookies();
+  const pendingInviteToken = cookieStore.get(PENDING_INVITE_COOKIE)?.value;
+  redirect(resolveEffectiveNext(next, pendingInviteToken));
 }
 
 export async function signUpAction(_prev: AuthActionState, formData: FormData): Promise<AuthActionState> {
@@ -33,6 +37,7 @@ export async function signUpAction(_prev: AuthActionState, formData: FormData): 
   const password = String(formData.get('password') || '');
   const confirmPassword = String(formData.get('confirmPassword') || '');
   const fullName = String(formData.get('fullName') || '').trim();
+  const next = String(formData.get('next') || '/');
 
   if (!email || !password || !fullName) {
     return { error: 'Bitte alle Felder ausfüllen.' };
@@ -44,13 +49,17 @@ export async function signUpAction(_prev: AuthActionState, formData: FormData): 
     return { error: 'Die Passwörter stimmen nicht überein.' };
   }
 
+  const cookieStore = await cookies();
+  const pendingInviteToken = cookieStore.get(PENDING_INVITE_COOKIE)?.value;
+  const effectiveNext = resolveEffectiveNext(next, pendingInviteToken);
+
   const supabase = await createClient();
   const { error } = await supabase.auth.signUp({
     email,
     password,
     options: {
       data: { full_name: fullName },
-      emailRedirectTo: `${publicEnv.appUrl}/auth/callback`,
+      emailRedirectTo: `${publicEnv.appUrl}/auth/callback?next=${encodeURIComponent(effectiveNext)}`,
     },
   });
 
