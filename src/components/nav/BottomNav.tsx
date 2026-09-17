@@ -18,25 +18,27 @@ export function BottomNav() {
 
   return (
     <nav
-      className="sticky bottom-0 z-30 mx-auto flex w-full max-w-app items-stretch justify-around border-t border-neutral-200 bg-white/95 backdrop-blur pb-safe-b"
+      className="sticky bottom-0 z-30 mx-auto w-full max-w-app bg-[#faf8f6]/90 px-3 pb-safe-b pt-2 backdrop-blur-md"
       aria-label="Hauptnavigation"
     >
-      {ITEMS.map(({ href, key, icon: Icon }) => {
-        const active = href === '/' ? pathname === '/' : pathname.startsWith(href);
-        return (
-          <Link
-            key={href}
-            href={href}
-            className={clsx(
-              'flex min-h-[56px] flex-1 flex-col items-center justify-center gap-0.5 py-2 text-[11px] font-medium',
-              active ? 'text-brand' : 'text-neutral-400'
-            )}
-          >
-            <Icon active={active} />
-            <span>{t(key)}</span>
-          </Link>
-        );
-      })}
+      <div className="flex items-stretch justify-around rounded-[28px] bg-white px-1.5 py-1.5 shadow-[0_2px_4px_rgba(20,15,10,0.04),0_16px_32px_-16px_rgba(20,15,10,0.18)]">
+        {ITEMS.map(({ href, key, icon: Icon }) => {
+          const active = href === '/' ? pathname === '/' : pathname.startsWith(href);
+          return (
+            <Link
+              key={href}
+              href={href}
+              className={clsx(
+                'flex min-h-[52px] flex-1 flex-col items-center justify-center gap-0.5 rounded-full py-2 text-[11px] font-semibold transition-colors',
+                active ? 'bg-brand-50 text-brand' : 'text-neutral-400'
+              )}
+            >
+              <Icon active={active} />
+              <span>{t(key)}</span>
+            </Link>
+          );
+        })}
+      </div>
     </nav>
   );
 }
