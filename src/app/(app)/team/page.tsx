@@ -15,8 +15,7 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
   const period = PERIODS.includes(periodParam as RankingPeriod) ? (periodParam as RankingPeriod) : 'current_week';
 
   const user = await requireAuthUser();
-  const profile = await getCurrentProfile();
-  const membership = await getPrimaryTeamMembership(user.id);
+  const [profile, membership] = await Promise.all([getCurrentProfile(), getPrimaryTeamMembership(user.id)]);
 
   if (!membership || !profile) {
     return (
@@ -45,6 +44,20 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
           <Link href="/team/verwalten" className="btn-ghost bg-neutral-100 text-xs">{t('team.manage')}</Link>
         )}
       </div>
+
+      {membership.role === 'team_admin' && (
+        <Link
+          href="/team/verwalten/einladungen"
+          className="card flex items-center gap-3 !py-4 transition active:scale-[0.98]"
+        >
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-brand-50 text-xl">📲</span>
+          <div className="flex-1">
+            <p className="text-sm font-bold text-neutral-900">{t('invite.title')}</p>
+            <p className="text-xs text-neutral-400">{t('invite.qrCode')} · {t('invite.copyLink')}</p>
+          </div>
+          <span className="text-neutral-300">›</span>
+        </Link>
+      )}
 
       <div className="grid grid-cols-2 gap-3">
         <Link href="/team/chat" className="btn-secondary">💬 {t('chat.title')}</Link>

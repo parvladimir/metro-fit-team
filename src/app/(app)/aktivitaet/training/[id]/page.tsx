@@ -9,12 +9,11 @@ import { t } from '@/lib/i18n';
 export default async function TrainingDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const user = await requireAuthUser();
-  const workout = await getWorkoutDetail(id);
+  const [workout, profile] = await Promise.all([getWorkoutDetail(id), getCurrentProfile()]);
 
   if (!workout || workout.user_id !== user.id) notFound();
   if (workout.status === 'abgeschlossen') redirect(`/aktivitaet/training/${id}/zusammenfassung`);
 
-  const profile = await getCurrentProfile();
   const membership = profile ? await getPrimaryTeamMembership(profile.id) : null;
   const catalogue = await getExerciseCatalogue(membership?.team_id ?? null);
   const volume = calculateVolumeKg(workout.workoutExercises);

@@ -8,8 +8,10 @@ export default async function ProfilPage() {
   const profile = await getCurrentProfile();
   if (!profile) return null;
 
-  const membership = await getPrimaryTeamMembership(profile.id);
-  const stats = await getProfileStats(profile.id);
+  const [membership, stats] = await Promise.all([
+    getPrimaryTeamMembership(profile.id),
+    getProfileStats(profile.id),
+  ]);
 
   return (
     <div className="screen-padding flex flex-col gap-5 pb-4">

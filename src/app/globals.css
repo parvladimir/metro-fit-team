@@ -12,7 +12,8 @@ body {
 }
 
 body {
-  @apply bg-neutral-50 text-neutral-900 antialiased;
+  @apply text-neutral-900 antialiased;
+  background: #faf8f6;
   overscroll-behavior-y: none;
 }
 
@@ -22,7 +23,12 @@ body {
 
 @layer components {
   .card {
-    @apply rounded-2xl bg-white shadow-sm border border-neutral-100 p-4;
+    @apply rounded-3xl bg-white p-5;
+    box-shadow: 0 1px 2px rgba(20, 15, 10, 0.04), 0 8px 24px -12px rgba(20, 15, 10, 0.08);
+  }
+
+  .card-flat {
+    @apply rounded-3xl bg-white p-5 border border-neutral-100;
   }
 
   .metric-number {
@@ -30,25 +36,26 @@ body {
   }
 
   .btn-primary {
-    @apply flex items-center justify-center gap-2 rounded-2xl bg-brand px-5 py-3.5 text-base font-semibold text-white
+    @apply flex items-center justify-center gap-2 rounded-full bg-brand px-5 py-3.5 text-base font-semibold text-white
       transition active:scale-[0.98] active:bg-brand-600 disabled:opacity-50 disabled:pointer-events-none;
     min-height: 48px;
+    box-shadow: 0 8px 20px -6px rgba(255, 90, 31, 0.45);
   }
 
   .btn-secondary {
-    @apply flex items-center justify-center gap-2 rounded-2xl bg-neutral-100 px-5 py-3.5 text-base font-semibold text-neutral-900
+    @apply flex items-center justify-center gap-2 rounded-full bg-neutral-100 px-5 py-3.5 text-base font-semibold text-neutral-900
       transition active:scale-[0.98] active:bg-neutral-200 disabled:opacity-50 disabled:pointer-events-none;
     min-height: 48px;
   }
 
   .btn-ghost {
-    @apply flex items-center justify-center gap-2 rounded-2xl px-4 py-2.5 text-sm font-medium text-neutral-600
+    @apply flex items-center justify-center gap-2 rounded-full px-4 py-2.5 text-sm font-medium text-neutral-600
       transition active:scale-[0.98] active:bg-neutral-100;
     min-height: 44px;
   }
 
   .input-field {
-    @apply w-full rounded-xl border border-neutral-200 bg-white px-4 py-3 text-base text-neutral-900
+    @apply w-full rounded-2xl border border-neutral-200 bg-white px-4 py-3 text-base text-neutral-900
       placeholder:text-neutral-400 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand-100;
     min-height: 48px;
   }
@@ -58,14 +65,16 @@ body {
   }
 
   .app-shell {
-    @apply mx-auto flex min-h-screen w-full max-w-app flex-col bg-neutral-50;
+    @apply mx-auto flex min-h-screen w-full max-w-app flex-col;
+    background: #faf8f6;
   }
 
   .screen-padding {
-    @apply px-4 pt-4;
+    @apply px-4 pt-5;
   }
 
   .section-title {
-    @apply text-xs font-bold uppercase tracking-wide text-neutral-500;
+    @apply text-xs font-bold uppercase tracking-wide text-neutral-400;
+    letter-spacing: 0.08em;
   }
 }
