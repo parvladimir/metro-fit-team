@@ -57,6 +57,17 @@ export default async function ProfilPage() {
       <form action={signOutAction}>
         <button type="submit" className="btn-ghost w-full bg-neutral-100 text-neutral-700">{t('auth.signOut')}</button>
       </form>
+
+      <footer className="pb-safe-b pt-2 text-center text-xs text-neutral-500">
+        <p>{t('profile.footer.credit')}</p>
+        <p className="mt-2">
+          {t('profile.footer.contact')}
+          <br />
+          <a href="mailto:v.paryacool@gmail.com" className="text-neutral-400 underline underline-offset-2">
+            v.paryacool@gmail.com
+          </a>
+        </p>
+      </footer>
     </div>
   );
 }

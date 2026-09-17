@@ -27,15 +27,12 @@ export default async function DashboardPage() {
       {/* DEINE WOCHE — hero ring, Steps-app style: one big friendly number first */}
       <section className="card flex flex-col items-center pt-6 text-center">
         <p className="section-title mb-4">{t('dashboard.yourWeek')}</p>
-        <div className="relative flex h-40 w-40 shrink-0 items-center justify-center">
-          <ProgressRing percent={goalPercent} size={160} strokeWidth={14} />
-          <div className="absolute flex flex-col items-center">
-            <span className="text-5xl font-extrabold tracking-tight text-neutral-900">{Math.round(goalPercent)}%</span>
-            <span className="mt-1 text-xs font-medium text-neutral-400">
-              {t('dashboard.workoutsOfGoal', { completed: data.weekly.completedWorkouts, goal: data.weekly.weeklyGoal })}
-            </span>
-          </div>
-        </div>
+        <ProgressRing
+          percent={goalPercent}
+          size={160}
+          strokeWidth={9}
+          label={t('dashboard.workoutsOfGoal', { completed: data.weekly.completedWorkouts, goal: data.weekly.weeklyGoal })}
+        />
 
         {data.weekly.pointsDeltaPct !== null && (
           <span

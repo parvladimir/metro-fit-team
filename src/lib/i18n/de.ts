@@ -340,6 +340,8 @@ export const de = {
   'profile.editProfile.title': 'Profil bearbeiten',
   'profile.editProfile.name': 'Name',
   'profile.editProfile.saved': 'Änderungen gespeichert.',
+  'profile.footer.credit': 'Created by Volodymyr Parashchak',
+  'profile.footer.contact': 'Bei Fragen oder Vorschlägen:',
 
   // ---- achievements ------------------------------------------------------------------------
   'achievements.firstWorkout.title': 'Erstes Training',
