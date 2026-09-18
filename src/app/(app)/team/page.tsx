@@ -15,6 +15,9 @@ import { Avatar } from '@/components/ui/Avatar';
 import { formatGermanDate } from '@/lib/date';
 import { t } from '@/lib/i18n';
 
+// Icon + label as one centered group; single line from ~350px, wraps cleanly below.
+const ACTION_BTN = 'btn-secondary relative gap-2 px-3 text-sm whitespace-nowrap max-[349px]:gap-1.5 max-[349px]:whitespace-normal max-[349px]:px-2 max-[349px]:text-[13px] max-[349px]:[hyphens:auto] max-[349px]:[overflow-wrap:anywhere] [&>span]:min-w-0';
+
 const PERIODS: RankingPeriod[] = ['current_week', 'last_week', 'current_month', 'all_time'];
 
 export default async function TeamPage({ searchParams }: { searchParams: Promise<{ period?: string }> }) {
@@ -72,14 +75,14 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
       )}
 
       <div className="grid grid-cols-2 gap-3">
-        <Link href="/team/chat" className="btn-secondary relative">
-          <MessageCircle size={17} strokeWidth={2} />
-          {t('chat.title')}
+        <Link href="/team/chat" className={ACTION_BTN}>
+          <MessageCircle size={18} strokeWidth={2} className="shrink-0" />
+          <span>{t('chat.title')}</span>
           <UnreadBadge initial={unreadChatCount} />
         </Link>
-        <Link href="/team/herausforderungen" className="btn-secondary">
-          <Trophy size={17} strokeWidth={2} />
-          {t('challenge.title')}
+        <Link href="/team/herausforderungen" className={ACTION_BTN}>
+          <Trophy size={18} strokeWidth={2} className="shrink-0" />
+          <span>{t('challenge.title')}</span>
         </Link>
       </div>
 

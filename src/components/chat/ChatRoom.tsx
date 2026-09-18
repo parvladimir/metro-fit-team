@@ -286,7 +286,7 @@ export function ChatRoom({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div ref={listRef} onScroll={handleScroll} className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-3">
+      <div ref={listRef} onScroll={handleScroll} className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 pb-3 pt-4">
         {messages.length === 0 ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-2 text-center text-neutral-400">
             <MessageCircle size={30} strokeWidth={1.6} />
