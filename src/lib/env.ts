@@ -33,8 +33,5 @@ export function getServerEnv() {
     initialTeamName: process.env.INITIAL_TEAM_NAME || 'Fitness Team',
     /** Paired with publicEnv.vapidPublicKey — both or neither should be set. */
     vapidPrivateKey: process.env.VAPID_PRIVATE_KEY || null,
-    /** Transactional email (team invitations). Optional: sending is disabled if unset. */
-    resendApiKey: process.env.RESEND_API_KEY || null,
-    inviteEmailFrom: process.env.INVITE_EMAIL_FROM || 'METRO Fit Team <onboarding@resend.dev>',
   };
 }

@@ -5,8 +5,9 @@ import { createClient } from '@/lib/supabase/server';
 import { requireTeamAdminMembership } from '@/lib/data/admin';
 import { generateInviteToken } from '@/lib/invite-token';
 import { appConfig } from '@/lib/config';
-import { buildInviteEmail, isEmailConfigured, sendEmail } from '@/lib/server/email';
+import { buildInviteEmail, buildInviteUrl, isEmailConfigured, sendMail } from '@/lib/server/mail';
 
+const FAILED = 'Einladung konnte nicht gesendet werden. Bitte versuche es später erneut.';
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
 export type SendInviteEmailState = { success?: string; error?: string } | undefined;
@@ -73,9 +74,26 @@ export async function sendInviteEmailAction(_prev: SendInviteEmailState, formDat
 
   const email = String(formData.get('email') || '').trim().toLowerCase();
   if (email.length > 254 || !EMAIL_RE.test(email)) return { error: 'Bitte eine gültige E-Mail-Adresse eingeben.' };
-  if (!isEmailConfigured()) return { error: 'Der E-Mail-Versand ist noch nicht eingerichtet.' };
+  if (!isEmailConfigured()) return { error: FAILED };
 
+  // Accidental double-click / rapid resend to the same address.
+  const { count: recent } = await supabase
+    .from('team_invite_emails')
+    .select('id', { count: 'exact', head: true })
+    .eq('team_id', admin.team_id)
+    .eq('email', email)
+    .eq('status', 'sent')
+    .gt('created_at', new Date(Date.now() - 2 * 60 * 1000).toISOString());
+  if ((recent ?? 0) > 0) return { error: 'Diese Einladung wurde gerade erst gesendet.' };
+
+  let inviteUrl: string;
   const { token, tokenHash } = generateInviteToken();
+  try {
+    inviteUrl = buildInviteUrl(appConfig.url, token, process.env.VERCEL_ENV === 'production' || process.env.NODE_ENV === 'production');
+  } catch {
+    console.error('[invite] refusing to mail an invite with a non-production app URL');
+    return { error: FAILED };
+  }
   const { data: invite, error: inviteError } = await supabase
     .from('team_invites')
     .insert({
@@ -87,7 +105,7 @@ export async function sendInviteEmailAction(_prev: SendInviteEmailState, formDat
     })
     .select('id')
     .single();
-  if (inviteError || !invite) return { error: 'Einladung konnte nicht gesendet werden.' };
+  if (inviteError || !invite) return { error: FAILED };
 
   const revoke = () =>
     supabase.from('team_invites').update({ revoked_at: new Date().toISOString() }).eq('id', invite.id).eq('team_id', admin.team_id);
@@ -102,11 +120,11 @@ export async function sendInviteEmailAction(_prev: SendInviteEmailState, formDat
   if (logError || !logRow) {
     await revoke();
     const limited = logError?.message?.includes('invite_rate_limited');
-    return { error: limited ? 'Zu viele Einladungen in kurzer Zeit. Bitte warte einen Moment.' : 'Einladung konnte nicht gesendet werden.' };
+    return { error: limited ? 'Zu viele Einladungen in kurzer Zeit. Bitte warte einen Moment.' : FAILED };
   }
 
-  const mail = buildInviteEmail(admin.team_name, `${appConfig.url}/beitreten/${token}`);
-  const sent = await sendEmail({ to: email, ...mail });
+  const mail = buildInviteEmail(admin.team_name, inviteUrl);
+  const sent = await sendMail({ to: email, ...mail });
 
   await supabase.from('audit_events').insert([
     { team_id: admin.team_id, actor_user_id: admin.user_id, action: 'invite_created', entity_type: 'team_invite', entity_id: invite.id },
@@ -123,7 +141,7 @@ export async function sendInviteEmailAction(_prev: SendInviteEmailState, formDat
     await supabase.from('team_invite_emails').update({ status: 'failed' }).eq('id', logRow.id);
     await revoke();
     revalidatePath('/team/verwalten/einladungen');
-    return { error: 'Einladung konnte nicht gesendet werden.' };
+    return { error: FAILED };
   }
 
   revalidatePath('/team/verwalten/einladungen');

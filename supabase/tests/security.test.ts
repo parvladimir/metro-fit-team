@@ -435,4 +435,12 @@ describeIntegration('Row Level Security', () => {
     }
     expect(limited).toBe(true);
   });
+
+  it('26. a normal member cannot create a team invite (crafted request)', async () => {
+    const { createHash } = await import('node:crypto');
+    const r = await userB.client.from('team_invites').insert({
+      team_id: teamId, token_hash: createHash('sha256').update('crafted-' + Date.now()).digest('hex'), created_by: userB.id, max_uses: 1,
+    });
+    expect(r.error).not.toBeNull();
+  });
 });
