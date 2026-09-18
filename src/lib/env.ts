@@ -12,6 +12,9 @@ export const publicEnv = {
   appName: process.env.NEXT_PUBLIC_APP_NAME || 'Fit Team',
   defaultLocale: (process.env.NEXT_PUBLIC_DEFAULT_LOCALE as 'de' | 'en' | 'ru') || 'de',
   appUrl: process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000',
+  /** Web Push is an enhancement — null (not required()) so the app still
+   * works fine without VAPID keys configured, it just skips push setup. */
+  vapidPublicKey: process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || null,
 };
 
 /**
@@ -28,5 +31,7 @@ export function getServerEnv() {
     supabaseServiceRoleKey: required('SUPABASE_SERVICE_ROLE_KEY', process.env.SUPABASE_SERVICE_ROLE_KEY),
     initialAdminEmail: (process.env.INITIAL_ADMIN_EMAIL || '').trim().toLowerCase(),
     initialTeamName: process.env.INITIAL_TEAM_NAME || 'Fitness Team',
+    /** Paired with publicEnv.vapidPublicKey — both or neither should be set. */
+    vapidPrivateKey: process.env.VAPID_PRIVATE_KEY || null,
   };
 }

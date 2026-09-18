@@ -1,4 +1,4 @@
-import Link from 'next/link';
+import { BackLink } from '@/components/ui/BackLink';
 import { requireTeamAdminMembership } from '@/lib/data/admin';
 import { updateTeamSettingsAction } from './actions';
 import { t } from '@/lib/i18n';
@@ -9,7 +9,7 @@ export default async function TeamEinstellungenPage() {
   return (
     <div className="screen-padding flex flex-col gap-4 pb-8">
       <div className="flex items-center gap-3">
-        <Link href="/team/verwalten" className="text-2xl text-neutral-400">‹</Link>
+        <BackLink href="/team/verwalten" />
         <h1 className="text-xl font-bold text-neutral-900">{t('admin.teamSettings')}</h1>
       </div>
 

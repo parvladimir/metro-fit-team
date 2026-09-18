@@ -1,4 +1,5 @@
-import Link from 'next/link';
+import { Lock } from 'lucide-react';
+import { BackLink } from '@/components/ui/BackLink';
 import { addMeasurementAction } from '../../actions';
 import { MEASUREMENT_FIELDS } from '@/lib/data/measurements';
 import { t } from '@/lib/i18n';
@@ -9,11 +10,14 @@ export default function NeueMessungPage() {
   return (
     <div className="screen-padding flex flex-col gap-5 pb-8">
       <div className="flex items-center gap-3">
-        <Link href="/aktivitaet?tab=messungen" className="text-2xl text-neutral-400">‹</Link>
+        <BackLink href="/aktivitaet?tab=messungen" />
         <h1 className="text-xl font-bold text-neutral-900">{t('measurement.add')}</h1>
       </div>
 
-      <p className="rounded-xl bg-neutral-100 px-4 py-3 text-xs text-neutral-500">🔒 {t('measurement.private.notice')}</p>
+      <p className="flex items-center gap-1.5 rounded-xl bg-neutral-100 px-4 py-3 text-xs text-neutral-500">
+        <Lock size={13} strokeWidth={2} className="shrink-0" />
+        {t('measurement.private.notice')}
+      </p>
 
       <form action={addMeasurementAction} className="flex flex-col gap-4">
         <div>

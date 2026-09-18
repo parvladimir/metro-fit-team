@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { ChevronRight } from 'lucide-react';
 import { requireAuthUser } from '@/lib/data/profile';
 import { getOrCreateActivePlan, getPlanDays } from '@/lib/data/plan';
 import { t } from '@/lib/i18n';
@@ -13,7 +14,7 @@ export default async function PlanPage() {
 
   return (
     <div className="screen-padding flex flex-col gap-4 pb-4">
-      <h1 className="text-2xl font-bold text-neutral-900">{t('plan.title')}</h1>
+      <h1 className="text-page-title text-neutral-900">{t('plan.title')}</h1>
 
       <div className="flex flex-col gap-2.5">
         {WEEKDAYS.map((weekday) => {
@@ -38,7 +39,7 @@ export default async function PlanPage() {
                   <p className="mt-0.5 text-sm text-neutral-400">{t('plan.addExercise')}</p>
                 )}
               </div>
-              <span className="text-neutral-300">›</span>
+              <ChevronRight size={18} className="shrink-0 text-neutral-300" />
             </Link>
           );
         })}

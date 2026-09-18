@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { Download, X } from 'lucide-react';
 import { appConfig } from '@/lib/config';
 import { t } from '@/lib/i18n';
 
@@ -54,7 +55,9 @@ export function InstallPrompt() {
 
   return (
     <div className="card mx-4 mb-3 flex items-center gap-3 !py-3">
-      <span className="text-xl">📲</span>
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand-50 text-brand">
+        <Download size={18} strokeWidth={2} />
+      </span>
       <div className="flex-1">
         <p className="text-sm font-semibold text-neutral-900">{t('pwa.installTitle', { appName: appConfig.name })}</p>
         <p className="text-xs text-neutral-400">{isIos ? t('pwa.installIos') : t('pwa.installDescription')}</p>
@@ -65,12 +68,14 @@ export function InstallPrompt() {
             await deferredPrompt.prompt();
             dismiss();
           }}
-          className="shrink-0 rounded-xl bg-brand px-3 py-2 text-xs font-semibold text-[#00232A]"
+          className="btn-primary shrink-0 px-3.5 py-2 text-xs"
         >
           {t('pwa.installAndroid')}
         </button>
       ) : (
-        <button onClick={dismiss} className="shrink-0 text-lg text-neutral-400">×</button>
+        <button onClick={dismiss} className="btn-icon shrink-0" aria-label="Schließen">
+          <X size={17} strokeWidth={2} />
+        </button>
       )}
     </div>
   );

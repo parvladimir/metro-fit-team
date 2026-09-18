@@ -38,8 +38,9 @@ export async function addExerciseToDayAction(formData: FormData) {
 
   const weekday = Number(formData.get('weekday'));
   const exerciseId = String(formData.get('exerciseId'));
-  const targetSets = Number(formData.get('targetSets') || 3);
-  const targetReps = Number(formData.get('targetReps') || 10);
+  // Only strength/bodyweight exercises send set targets (other types have none).
+  const targetSets = formData.get('targetSets') ? Math.min(50, Math.max(1, Number(formData.get('targetSets')))) : null;
+  const targetReps = formData.get('targetReps') ? Math.min(1000, Math.max(1, Number(formData.get('targetReps')))) : null;
   const title = String(formData.get('title') || '');
 
   const { data: day } = await supabase

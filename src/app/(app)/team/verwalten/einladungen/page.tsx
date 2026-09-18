@@ -1,7 +1,8 @@
-import Link from 'next/link';
+import { BackLink } from '@/components/ui/BackLink';
 import { requireTeamAdminMembership } from '@/lib/data/admin';
-import { getTeamInvites, isInviteActive } from '@/lib/data/invites';
+import { getTeamInvites, getInviteEmails, isInviteActive } from '@/lib/data/invites';
 import { revokeInviteAction } from './actions';
+import { EmailInviteForm } from '@/components/admin/EmailInviteForm';
 import { CreateInviteForm } from '@/components/admin/CreateInviteForm';
 import { formatGermanDate } from '@/lib/date';
 import { t } from '@/lib/i18n';
@@ -9,15 +10,31 @@ import { t } from '@/lib/i18n';
 export default async function EinladungenPage() {
   const admin = await requireTeamAdminMembership();
   const invites = await getTeamInvites(admin.team_id);
+  const mails = await getInviteEmails(admin.team_id);
 
   return (
     <div className="screen-padding flex flex-col gap-4 pb-4">
       <div className="flex items-center gap-3">
-        <Link href="/team/verwalten" className="text-2xl text-neutral-400">‹</Link>
+        <BackLink href="/team/verwalten" />
         <h1 className="text-xl font-bold text-neutral-900">{t('invite.title')}</h1>
       </div>
 
       <CreateInviteForm />
+      <EmailInviteForm />
+
+      {mails.length > 0 && (
+        <section className="flex flex-col gap-2">
+          <p className="section-title">Per E-Mail gesendet</p>
+          {mails.map((m) => (
+            <div key={m.id} className="card flex items-center justify-between gap-3 py-3">
+              <p className="min-w-0 flex-1 truncate text-sm text-neutral-800">{m.email}</p>
+              <p className={`shrink-0 text-xs ${m.status === 'sent' ? 'text-neutral-400' : 'text-red-400'}`}>
+                {m.status === 'sent' ? formatGermanDate(m.created_at) : 'Fehlgeschlagen'}
+              </p>
+            </div>
+          ))}
+        </section>
+      )}
 
       <div className="flex flex-col gap-2.5">
         {invites.map((invite) => {
@@ -35,7 +52,7 @@ export default async function EinladungenPage() {
               </div>
               {active && (
                 <form action={revokeInviteAction.bind(null, invite.id)}>
-                  <button type="submit" className="btn-ghost px-3 py-2 text-xs text-red-400">{t('invite.revoke')}</button>
+                  <button type="submit" className="btn-destructive shrink-0 px-3 py-2 text-xs">{t('invite.revoke')}</button>
                 </form>
               )}
             </div>

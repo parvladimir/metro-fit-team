@@ -1,20 +1,76 @@
 'use client';
 
+import { useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import clsx from 'clsx';
+import { Home, CalendarDays, Activity, Users, User } from 'lucide-react';
+import { createClient } from '@/lib/supabase/client';
+import { refreshUnread, useUnreadCount } from '@/lib/unread-store';
 import { t } from '@/lib/i18n';
 
 const ITEMS = [
-  { href: '/', key: 'nav.home', icon: HomeIcon },
-  { href: '/plan', key: 'nav.plan', icon: PlanIcon },
-  { href: '/aktivitaet', key: 'nav.activity', icon: ActivityIcon },
-  { href: '/team', key: 'nav.team', icon: TeamIcon },
-  { href: '/profil', key: 'nav.profile', icon: ProfileIcon },
+  { href: '/', key: 'nav.home', icon: Home },
+  { href: '/plan', key: 'nav.plan', icon: CalendarDays },
+  { href: '/aktivitaet', key: 'nav.activity', icon: Activity },
+  { href: '/team', key: 'nav.team', icon: Users },
+  { href: '/profil', key: 'nav.profile', icon: User },
 ] as const;
 
-export function BottomNav() {
+export function BottomNav({ teamId, initialUnreadCount }: { teamId: string | null; initialUnreadCount: number }) {
   const pathname = usePathname();
+  const unreadCount = useUnreadCount(initialUnreadCount);
+
+  // Re-read the real count from the database on every navigation (the layout
+  // itself is not re-rendered by client-side navigation) and when the app
+  // regains focus (e.g. reopened PWA, another device read the chat).
+  useEffect(() => {
+    void refreshUnread(teamId);
+  }, [teamId, pathname]);
+
+  useEffect(() => {
+    const onFocus = () => void refreshUnread(teamId);
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
+    };
+  }, [teamId]);
+
+  // Live updates: any new HUMAN message from someone else triggers a fresh
+  // count from the database (system events and own messages never count —
+  // the RPC enforces that, this filter just avoids pointless round trips).
+  useEffect(() => {
+    if (!teamId) return;
+    const supabase = createClient();
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+    let cancelled = false;
+
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (cancelled || !session) return;
+      supabase.realtime.setAuth(session.access_token);
+      const myUserId = session.user.id;
+
+      channel = supabase
+        .channel(`unread:${teamId}`)
+        .on(
+          'postgres_changes',
+          { event: 'INSERT', schema: 'public', table: 'messages', filter: `team_id=eq.${teamId}` },
+          (payload) => {
+            const row = payload.new as { user_id: string; message_type?: string };
+            if (row.user_id === myUserId || row.message_type === 'system') return;
+            void refreshUnread(teamId);
+          }
+        )
+        .subscribe();
+    });
+
+    return () => {
+      cancelled = true;
+      if (channel) supabase.removeChannel(channel);
+    };
+  }, [teamId]);
 
   return (
     <nav
@@ -24,6 +80,7 @@ export function BottomNav() {
       <div className="flex items-stretch justify-around rounded-[28px] border border-white/5 bg-neutral-100 px-1.5 py-1.5 shadow-[0_1px_0_rgba(255,255,255,0.04)_inset,0_16px_32px_-16px_rgba(0,0,0,0.6)]">
         {ITEMS.map(({ href, key, icon: Icon }) => {
           const active = href === '/' ? pathname === '/' : pathname.startsWith(href);
+          const showBadge = href === '/team' && unreadCount > 0;
           return (
             <Link
               key={href}
@@ -33,60 +90,19 @@ export function BottomNav() {
                 active ? 'bg-brand-50 text-brand' : 'text-neutral-400'
               )}
             >
-              <Icon active={active} />
+              <span className="relative">
+                <Icon size={23} strokeWidth={active ? 2.4 : 1.9} />
+                {showBadge && (
+                  <span className="absolute -right-2 -top-1.5 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-brand px-1 text-[9px] font-bold leading-none text-[#00232A]">
+                    {unreadCount > 9 ? '9+' : unreadCount}
+                  </span>
+                )}
+              </span>
               <span>{t(key)}</span>
             </Link>
           );
         })}
       </div>
     </nav>
-  );
-}
-
-type IconProps = { active: boolean };
-
-function HomeIcon({ active }: IconProps) {
-  return (
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? 2.4 : 2}>
-      <path d="M3 11.5 12 4l9 7.5" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M5.5 10v9a1 1 0 0 0 1 1H9a1 1 0 0 0 1-1v-4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v4a1 1 0 0 0 1 1h2.5a1 1 0 0 0 1-1v-9" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function PlanIcon({ active }: IconProps) {
-  return (
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? 2.4 : 2}>
-      <rect x="4" y="4" width="16" height="17" rx="2" />
-      <path d="M8 2.5v3M16 2.5v3M4 10h16" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function ActivityIcon({ active }: IconProps) {
-  return (
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? 2.4 : 2}>
-      <path d="M3 12h3.5l2-6 4 12 2-8 1.5 2H21" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function TeamIcon({ active }: IconProps) {
-  return (
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? 2.4 : 2}>
-      <circle cx="9" cy="8" r="3" />
-      <path d="M2.5 20c0-3.3 2.9-6 6.5-6s6.5 2.7 6.5 6" strokeLinecap="round" />
-      <circle cx="17" cy="8" r="2.5" />
-      <path d="M15.5 14.2c2.9.5 5 2.8 5 5.8" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function ProfileIcon({ active }: IconProps) {
-  return (
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? 2.4 : 2}>
-      <circle cx="12" cy="8" r="4" />
-      <path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8" strokeLinecap="round" />
-    </svg>
   );
 }

@@ -9,9 +9,12 @@ export interface FeedItemWithActor extends ActivityFeedItem {
 
 export async function getTeamActivityFeed(teamId: string, limit = 30): Promise<FeedItemWithActor[]> {
   const supabase = await createClient();
+  // `profiles!inner` (rather than the default left-join embed) drops any
+  // feed row whose actor no longer resolves to a profile, so a deleted
+  // account never surfaces as an anonymous "Jemand"-attributed entry.
   const { data } = await supabase
     .from('activity_feed')
-    .select('*, profiles(full_name)')
+    .select('*, profiles!inner(full_name)')
     .eq('team_id', teamId)
     .order('created_at', { ascending: false })
     .limit(limit);

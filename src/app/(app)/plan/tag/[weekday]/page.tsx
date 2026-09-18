@@ -1,12 +1,21 @@
-import Link from 'next/link';
+import { BackLink } from '@/components/ui/BackLink';
 import { notFound } from 'next/navigation';
 import { requireAuthUser, getCurrentProfile, getPrimaryTeamMembership } from '@/lib/data/profile';
 import { getOrCreateActivePlan, getPlanDay, getExerciseCatalogue } from '@/lib/data/plan';
-import { saveDayAction, addExerciseToDayAction, removeExerciseFromDayAction, deleteDayAction } from '../../actions';
+import { saveDayAction, removeExerciseFromDayAction, deleteDayAction } from '../../actions';
+import { AddPlanExerciseForm } from '@/components/plan/AddPlanExerciseForm';
+import { muscleGroupLabel, usesSetTargets } from '@/lib/exercise-types';
 import { t, type TranslationKey } from '@/lib/i18n';
 
-export default async function PlanDayPage({ params }: { params: Promise<{ weekday: string }> }) {
+export default async function PlanDayPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ weekday: string }>;
+  searchParams: Promise<{ neu?: string }>;
+}) {
   const { weekday: weekdayParam } = await params;
+  const { neu } = await searchParams;
   const weekday = Number(weekdayParam);
   if (!Number.isInteger(weekday) || weekday < 1 || weekday > 7) notFound();
 
@@ -23,7 +32,7 @@ export default async function PlanDayPage({ params }: { params: Promise<{ weekda
   return (
     <div className="screen-padding flex flex-col gap-5 pb-8">
       <div className="flex items-center gap-3">
-        <Link href="/plan" className="text-2xl text-neutral-400">‹</Link>
+        <BackLink href="/plan" />
         <h1 className="text-xl font-bold text-neutral-900">{t(`weekday.${weekday}` as TranslationKey)}</h1>
       </div>
 
@@ -49,7 +58,7 @@ export default async function PlanDayPage({ params }: { params: Promise<{ weekda
 
       {day && (
         <form action={deleteDay.bind(null, day.id, weekday)}>
-          <button type="submit" className="btn-ghost text-red-400">{t('plan.removeDay')}</button>
+          <button type="submit" className="btn-destructive">{t('plan.removeDay')}</button>
         </form>
       )}
 
@@ -59,15 +68,16 @@ export default async function PlanDayPage({ params }: { params: Promise<{ weekda
             <p className="section-title">{t('plan.selectExercises')}</p>
             {day && day.exercises.length > 0 ? (
               day.exercises.map((pe) => (
-                <div key={pe.id} className="card flex items-center justify-between py-3">
-                  <div>
-                    <p className="text-sm font-semibold text-neutral-900">{pe.exercise.name}</p>
+                <div key={pe.id} className="card flex items-center justify-between gap-3 py-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="break-words text-sm font-semibold text-neutral-900">{pe.exercise.name}</p>
                     <p className="text-xs text-neutral-500">
-                      {t(`exercise.muscleGroup.${pe.exercise.muscle_group}` as const)} · {pe.target_sets}×{pe.target_reps}
+                      {muscleGroupLabel(pe.exercise.muscle_group)}
+                      {usesSetTargets(pe.exercise.exercise_type) && pe.target_sets ? ` · ${pe.target_sets}×${pe.target_reps}` : ''}
                     </p>
                   </div>
-                  <form action={removeExercise.bind(null, pe.id, weekday)}>
-                    <button type="submit" className="btn-ghost px-3 py-2 text-xs text-red-400">{t('common.delete')}</button>
+                  <form action={removeExercise.bind(null, pe.id, weekday)} className="shrink-0">
+                    <button type="submit" className="btn-destructive px-3 py-2 text-xs">{t('common.delete')}</button>
                   </form>
                 </div>
               ))
@@ -76,32 +86,12 @@ export default async function PlanDayPage({ params }: { params: Promise<{ weekda
             )}
           </section>
 
-          <form action={addExerciseToDayAction} className="card flex flex-col gap-3">
-            <input type="hidden" name="weekday" value={weekday} />
-            <input type="hidden" name="title" value={day?.title || ''} />
-            <p className="text-sm font-semibold text-neutral-800">{t('plan.addExercise')}</p>
-            <select name="exerciseId" required className="input-field" defaultValue="">
-              <option value="" disabled>
-                {t('exercise.library.title')}
-              </option>
-              {catalogue.map((ex) => (
-                <option key={ex.id} value={ex.id}>
-                  {ex.name} ({t(`exercise.muscleGroup.${ex.muscle_group}` as const)})
-                </option>
-              ))}
-            </select>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="label" htmlFor="targetSets">{t('exercise.defaultSets')}</label>
-                <input id="targetSets" name="targetSets" type="number" defaultValue={3} min={1} className="input-field" />
-              </div>
-              <div>
-                <label className="label" htmlFor="targetReps">{t('exercise.defaultReps')}</label>
-                <input id="targetReps" name="targetReps" type="number" defaultValue={10} min={1} className="input-field" />
-              </div>
-            </div>
-            <button type="submit" className="btn-primary">{t('plan.addExercise')}</button>
-          </form>
+          <AddPlanExerciseForm
+            weekday={weekday}
+            dayTitle={day?.title || ''}
+            catalogue={catalogue}
+            defaultExerciseId={neu}
+          />
         </>
       )}
     </div>

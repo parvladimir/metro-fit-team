@@ -5,6 +5,9 @@ const config: Config = {
   content: ['./src/**/*.{ts,tsx}'],
   theme: {
     extend: {
+      fontFamily: {
+        sans: ['var(--font-sans)', 'system-ui', '-apple-system', 'Segoe UI', 'Roboto', 'sans-serif'],
+      },
       colors: {
         // Primary accent — cyan/turquoise, replacing the earlier orange brand.
         brand: {
@@ -51,6 +54,8 @@ const config: Config = {
       fontSize: {
         'metric-lg': ['2.75rem', { lineHeight: '1.05', fontWeight: '800' }],
         'metric-md': ['1.75rem', { lineHeight: '1.1', fontWeight: '700' }],
+        'page-title': ['1.5rem', { lineHeight: '1.25', letterSpacing: '-0.01em', fontWeight: '800' }],
+        'card-heading': ['1.0625rem', { lineHeight: '1.35', fontWeight: '700' }],
       },
       spacing: {
         'safe-b': 'env(safe-area-inset-bottom)',

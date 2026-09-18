@@ -13,9 +13,18 @@ export type FitnessGoal =
 export type TeamRole = 'member' | 'team_admin';
 
 export type MuscleGroup =
-  | 'chest' | 'back' | 'legs' | 'shoulders' | 'biceps' | 'triceps' | 'abs' | 'full_body' | 'cardio';
+  | 'chest' | 'back' | 'legs' | 'shoulders' | 'biceps' | 'triceps' | 'abs' | 'full_body' | 'cardio' | 'other';
 
-export type ExerciseType = 'strength' | 'cardio' | 'mobility' | 'other';
+export type ExerciseType =
+  | 'strength'
+  | 'bodyweight'
+  | 'cardio_distance'
+  | 'cardio_time'
+  | 'interval'
+  | 'mobility'
+  | 'sport'
+  | 'other'
+  | 'cardio'; // legacy value, migrated to cardio_distance/cardio_time
 
 export type ActivityType =
   | 'krafttraining' | 'laufen' | 'gehen' | 'radfahren' | 'schwimmen'
@@ -94,6 +103,10 @@ export interface Exercise {
   default_sets: number | null;
   default_reps: number | null;
   media_url: string | null;
+  owner_user_id: string | null;
+  is_custom: boolean;
+  visibility: 'global' | 'team' | 'private';
+  notes: string | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -167,8 +180,24 @@ export interface WorkoutSet {
   distance_km: number | null;
   duration_seconds: number | null;
   completed: boolean;
+  metrics: SetMetrics;
+  notes: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/** Optional, type-specific values stored in workout_sets.metrics (jsonb). */
+export interface SetMetrics {
+  rpe?: number;
+  rest_seconds?: number;
+  calories?: number;
+  avg_heart_rate?: number;
+  max_heart_rate?: number;
+  elevation_gain_m?: number;
+  incline_pct?: number;
+  rounds?: number;
+  work_seconds?: number;
+  interval_rest_seconds?: number;
 }
 
 export interface Activity {
@@ -299,6 +328,13 @@ export interface Message {
   user_id: string;
   reply_to_id: string | null;
   content: string;
+  message_type: 'text' | 'image' | 'system';
+  attachment_path: string | null;
+  attachment_mime: string | null;
+  attachment_width: number | null;
+  attachment_height: number | null;
+  event_type: string | null;
+  metadata: Record<string, unknown>;
   created_at: string;
   edited_at: string | null;
   deleted_at: string | null;
@@ -333,6 +369,7 @@ export interface NotificationPreferences {
   herausforderung: boolean;
   team_aktivitaet: boolean;
   wochenzusammenfassung: boolean;
+  chat_nachrichten: boolean;
 }
 
 export interface Achievement {

@@ -1,4 +1,5 @@
-import Link from 'next/link';
+import { ScrollText } from 'lucide-react';
+import { BackLink } from '@/components/ui/BackLink';
 import { requireTeamAdminMembership, getAuditLog } from '@/lib/data/admin';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { formatGermanDate } from '@/lib/date';
@@ -24,12 +25,12 @@ export default async function AktivitaetenPage() {
   return (
     <div className="screen-padding flex flex-col gap-4 pb-4">
       <div className="flex items-center gap-3">
-        <Link href="/team/verwalten" className="text-2xl text-neutral-400">‹</Link>
+        <BackLink href="/team/verwalten" />
         <h1 className="text-xl font-bold text-neutral-900">{t('admin.auditLog.title')}</h1>
       </div>
 
       {events.length === 0 ? (
-        <EmptyState title="Noch keine Administrationsaktivitäten." icon="📜" />
+        <EmptyState title="Noch keine Administrationsaktivitäten." icon={ScrollText} />
       ) : (
         <div className="flex flex-col gap-2">
           {events.map((e) => (

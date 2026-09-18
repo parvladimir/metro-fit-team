@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { TrendingUp, Award, BarChart3, Lock, Settings, Wrench, ChevronRight, type LucideIcon } from 'lucide-react';
 import { getCurrentProfile, getPrimaryTeamMembership } from '@/lib/data/profile';
 import { getProfileStats } from '@/lib/data/stats';
 import { signOutAction } from '@/app/(auth)/actions';
@@ -46,12 +47,12 @@ export default async function ProfilPage() {
       )}
 
       <div className="flex flex-col gap-2.5">
-        <MenuLink href="/profil/fortschritt" icon="📈" label={t('chart.progress.title')} />
-        <MenuLink href="/profil/erfolge" icon="🏅" label={t('profile.achievements')} />
-        <MenuLink href="/profil/metriken" icon="📊" label={t('metric.manage')} />
-        <MenuLink href="/profil/datenschutz" icon="🔒" label={t('profile.privacySettings')} />
-        <MenuLink href="/profil/einstellungen" icon="⚙️" label={t('profile.appSettings')} />
-        {membership?.role === 'team_admin' && <MenuLink href="/team/verwalten" icon="🛠️" label={t('profile.teamManagement')} />}
+        <MenuLink href="/profil/fortschritt" icon={TrendingUp} label={t('chart.progress.title')} />
+        <MenuLink href="/profil/erfolge" icon={Award} label={t('profile.achievements')} />
+        <MenuLink href="/profil/metriken" icon={BarChart3} label={t('metric.manage')} />
+        <MenuLink href="/profil/datenschutz" icon={Lock} label={t('profile.privacySettings')} />
+        <MenuLink href="/profil/einstellungen" icon={Settings} label={t('profile.appSettings')} />
+        {membership?.role === 'team_admin' && <MenuLink href="/team/verwalten" icon={Wrench} label={t('profile.teamManagement')} />}
       </div>
 
       <form action={signOutAction}>
@@ -81,12 +82,14 @@ function StatCard({ label, value }: { label: string; value: string }) {
   );
 }
 
-function MenuLink({ href, icon, label }: { href: string; icon: string; label: string }) {
+function MenuLink({ href, icon: Icon, label }: { href: string; icon: LucideIcon; label: string }) {
   return (
     <Link href={href} className="card flex items-center gap-3 py-3.5">
-      <span className="text-lg">{icon}</span>
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-neutral-150 text-neutral-500">
+        <Icon size={18} strokeWidth={1.9} />
+      </span>
       <span className="flex-1 text-sm font-semibold text-neutral-900">{label}</span>
-      <span className="text-neutral-300">›</span>
+      <ChevronRight size={18} className="shrink-0 text-neutral-300" />
     </Link>
   );
 }

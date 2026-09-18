@@ -1,4 +1,4 @@
-import Link from 'next/link';
+import { BackLink } from '@/components/ui/BackLink';
 import { createClient } from '@/lib/supabase/server';
 import { requireAuthUser } from '@/lib/data/profile';
 import { updatePrivacySettingsAction } from '../actions';
@@ -14,7 +14,7 @@ export default async function DatenschutzPage() {
   return (
     <div className="screen-padding flex flex-col gap-4 pb-8">
       <div className="flex items-center gap-3">
-        <Link href="/profil" className="text-2xl text-neutral-400">‹</Link>
+        <BackLink href="/profil" />
         <h1 className="text-xl font-bold text-neutral-900">{t('privacy.title')}</h1>
       </div>
 

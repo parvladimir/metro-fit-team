@@ -305,6 +305,7 @@ export const de = {
   'chat.reply': 'Antworten',
   'chat.empty.title': 'Noch keine Nachrichten vorhanden.',
   'chat.empty.action': 'Erste Nachricht schreiben',
+  'chat.newMessages': 'Neue Nachrichten',
 
   // ---- activity feed ---------------------------------------------------------------------
   'feed.title': 'Aktivität',
@@ -359,6 +360,7 @@ export const de = {
   'achievements.empty': 'Noch keine Auszeichnungen freigeschaltet.',
 
   // ---- notifications ------------------------------------------------------------------------
+  'notification.category.chat_nachrichten': 'Chat-Nachrichten',
   'notification.category.trainingserinnerung': 'Trainingserinnerung',
   'notification.category.wochenziel': 'Wochenziel',
   'notification.category.messungserinnerung': 'Messungserinnerung',
@@ -423,6 +425,11 @@ export const de = {
   'pwa.installDescription': 'Füge die App zu deinem Startbildschirm hinzu für den schnellsten Zugriff.',
   'pwa.installIos': 'Tippe auf „Teilen“ und dann auf „Zum Home-Bildschirm“.',
   'pwa.installAndroid': 'App installieren',
+
+  'push.chat.title': 'Chat-Benachrichtigungen aktivieren',
+  'push.chat.description': 'Erhalte eine Benachrichtigung, wenn jemand deinem Team schreibt.',
+  'push.chat.iosInstallHint': 'Füge die App zuerst zu deinem Home-Bildschirm hinzu, um Benachrichtigungen zu erhalten.',
+  'push.chat.enable': 'Aktivieren',
 } as const;
 
 export type TranslationKey = keyof typeof de;
