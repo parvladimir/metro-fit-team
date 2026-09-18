@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { requireAuthUser, getCurrentProfile, getPrimaryTeamMembership } from '@/lib/data/profile';
-import { getUnreadChatCount } from '@/lib/data/chat';
+import { getUnreadChatCount, getUnreadNotificationCount } from '@/lib/data/chat';
+import { NotificationSync } from '@/components/notifications/NotificationSync';
 import { BottomNav } from '@/components/nav/BottomNav';
 import { InstallPrompt } from '@/components/pwa/InstallPrompt';
 
@@ -13,11 +14,15 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   }
 
   const membership = await getPrimaryTeamMembership(user.id);
-  const unreadChatCount = membership ? await getUnreadChatCount(membership.team_id) : 0;
+  const [unreadChatCount, notificationCount] = await Promise.all([
+    membership ? getUnreadChatCount(membership.team_id) : Promise.resolve(0),
+    getUnreadNotificationCount(user.id),
+  ]);
 
   return (
     <div className="app-shell">
       <main className="flex min-h-0 flex-1 flex-col pb-6">{children}</main>
+      <NotificationSync userId={user.id} initialCount={notificationCount} />
       <InstallPrompt />
       <BottomNav teamId={membership?.team_id ?? null} initialUnreadCount={unreadChatCount} />
     </div>

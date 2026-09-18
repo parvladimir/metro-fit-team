@@ -1,13 +1,15 @@
 import { MessageCircle } from 'lucide-react';
 import { BackLink } from '@/components/ui/BackLink';
 import { requireAuthUser, getPrimaryTeamMembership } from '@/lib/data/profile';
-import { getRecentMessages, getChatLastReadAt } from '@/lib/data/chat';
+import { getRecentMessages, getChatLastReadAt, getEventSocial } from '@/lib/data/chat';
+import { isValidMessageId } from '@/lib/event-social';
 import { ChatRoom } from '@/components/chat/ChatRoom';
 import { ChatPushPrompt } from '@/components/chat/ChatPushPrompt';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { t } from '@/lib/i18n';
 
-export default async function ChatPage() {
+export default async function ChatPage({ searchParams }: { searchParams: Promise<{ message?: string }> }) {
+  const { message } = await searchParams;
   const user = await requireAuthUser();
   const membership = await getPrimaryTeamMembership(user.id);
 
@@ -24,6 +26,8 @@ export default async function ChatPage() {
     getChatLastReadAt(membership.team_id, user.id),
   ]);
 
+  const social = await getEventSocial(messages.filter((m) => m.message_type === 'system').map((m) => m.id));
+
   return (
     <div className="-mb-6 flex h-full min-h-0 flex-1 flex-col">
       <div
@@ -39,6 +43,8 @@ export default async function ChatPage() {
         currentUserId={user.id}
         initialMessages={messages}
         previousReadAt={previousReadAt}
+        initialSocial={social}
+        focusMessageId={isValidMessageId(message) ? message : null}
       />
     </div>
   );

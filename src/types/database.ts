@@ -333,6 +333,8 @@ export interface Message {
   team_id: string;
   user_id: string;
   reply_to_id: string | null;
+  /** Set on replies that belong to an activity event (one level only). */
+  parent_message_id: string | null;
   content: string;
   message_type: 'text' | 'image' | 'system';
   attachment_path: string | null;
@@ -376,6 +378,7 @@ export interface NotificationPreferences {
   team_aktivitaet: boolean;
   wochenzusammenfassung: boolean;
   chat_nachrichten: boolean;
+  reaktionen_antworten: boolean;
 }
 
 export interface Achievement {

@@ -53,27 +53,38 @@ self.addEventListener('push', (event) => {
     }
   }
 
-  event.waitUntil(
+  const tasks = [
     self.registration.showNotification(payload.title, {
       body: payload.body,
       icon: '/icons/icon-192.png',
       badge: '/icons/icon-192.png',
+      // Same tag = a newer notification for the same event replaces the old one.
+      tag: payload.tag || undefined,
+      renotify: !!payload.tag,
       data: { url: payload.url },
-    })
-  );
+    }),
+  ];
+
+  // App icon badge for personal (reaction/reply) notifications where the
+  // Badging API exists in the service worker — feature-detected, optional.
+  if (typeof payload.badgeCount === 'number' && self.navigator && 'setAppBadge' in self.navigator) {
+    tasks.push(self.navigator.setAppBadge(payload.badgeCount).catch(() => undefined));
+  }
+
+  event.waitUntil(Promise.all(tasks));
 });
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const targetUrl = event.notification.data && event.notification.data.url ? event.notification.data.url : '/team/chat';
+  const rawUrl = event.notification.data && event.notification.data.url ? event.notification.data.url : '/team/chat';
+  // Only ever open same-origin paths.
+  const targetUrl = rawUrl.startsWith('/') && !rawUrl.startsWith('//') ? rawUrl : '/team/chat';
 
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientsArr) => {
-      const existing = clientsArr.find((c) => new URL(c.url).pathname === targetUrl);
-      if (existing) return existing.focus();
-      const anyClient = clientsArr[0];
-      if (anyClient && 'navigate' in anyClient) {
-        return anyClient.navigate(targetUrl).then((c) => c && c.focus());
+      const sameOrigin = clientsArr.find((c) => new URL(c.url).origin === self.location.origin);
+      if (sameOrigin && 'navigate' in sameOrigin) {
+        return sameOrigin.navigate(targetUrl).then((c) => (c || sameOrigin).focus());
       }
       return self.clients.openWindow(targetUrl);
     })

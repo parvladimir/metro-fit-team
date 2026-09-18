@@ -2,6 +2,7 @@ import 'server-only';
 import webpush from 'web-push';
 import { publicEnv, getServerEnv } from '@/lib/env';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { eventDeepLink, reactionText, replyText } from '@/lib/event-social';
 
 let vapidConfigured = false;
 
@@ -14,6 +15,74 @@ function ensureVapidConfigured() {
   const { vapidPrivateKey } = getServerEnv();
   webpush.setVapidDetails('mailto:v.paryacool@gmail.com', publicEnv.vapidPublicKey!, vapidPrivateKey!);
   vapidConfigured = true;
+}
+
+type PushSub = { id: string; endpoint: string; p256dh: string; auth: string };
+
+async function deliver(admin: ReturnType<typeof createAdminClient>, subs: PushSub[], payload: string) {
+  await Promise.allSettled(
+    subs.map(async (sub) => {
+      try {
+        await webpush.sendNotification({ endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } }, payload);
+      } catch (err) {
+        const statusCode = (err as { statusCode?: number } | null)?.statusCode;
+        if (statusCode === 404 || statusCode === 410) {
+          await admin.from('push_subscriptions').delete().eq('id', sub.id);
+        }
+        // Other delivery errors are transient — keep the subscription.
+      }
+    })
+  );
+}
+
+/**
+ * Push for a reaction/reply on someone's activity event. Goes ONLY to the
+ * event owner (never self), respects the "Reaktionen & Antworten" preference,
+ * and carries just the actor's first name, the workout title and a short reply
+ * preview. Every failure is swallowed — the in-app notification already exists.
+ */
+export async function notifyEventOwner(params: {
+  ownerId: string;
+  actorId: string;
+  messageId: string;
+  kind: 'reaction' | 'reply';
+  eventTitle?: string | null;
+  replyContent?: string;
+}): Promise<void> {
+  if (params.ownerId === params.actorId || !isPushConfigured()) return;
+  try {
+    ensureVapidConfigured();
+    const admin = createAdminClient();
+    const [{ data: actor }, { data: pref }, { data: subs }, { count }] = await Promise.all([
+      admin.from('profiles').select('full_name').eq('id', params.actorId).single(),
+      admin.from('notification_preferences').select('reaktionen_antworten').eq('user_id', params.ownerId).maybeSingle(),
+      admin.from('push_subscriptions').select('id, endpoint, p256dh, auth').eq('user_id', params.ownerId),
+      admin
+        .from('notifications')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', params.ownerId)
+        .eq('category', 'reaktion_antwort')
+        .is('read_at', null),
+    ]);
+    if (pref && pref.reaktionen_antworten === false) return;
+    if (!subs || subs.length === 0) return;
+
+    const actorName = actor?.full_name || 'Jemand';
+    const body =
+      params.kind === 'reply'
+        ? replyText(actorName, params.replyContent ?? '')
+        : reactionText(actorName, params.eventTitle);
+    const payload = JSON.stringify({
+      title: 'METRO Fit Team',
+      body,
+      url: eventDeepLink(params.messageId),
+      tag: `event-${params.messageId}`,
+      badgeCount: count ?? 1,
+    });
+    await deliver(admin, subs as PushSub[], payload);
+  } catch {
+    // never surface push failures
+  }
 }
 
 /**
@@ -61,20 +130,7 @@ export async function notifyTeamOfNewChatMessage(params: { teamId: string; sende
       url: '/team/chat',
     });
 
-    await Promise.allSettled(
-      subs.map(async (sub) => {
-        try {
-          await webpush.sendNotification({ endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } }, payload);
-        } catch (err) {
-          const statusCode = (err as { statusCode?: number } | null)?.statusCode;
-          if (statusCode === 404 || statusCode === 410) {
-            await admin.from('push_subscriptions').delete().eq('id', sub.id);
-          }
-          // Any other delivery error (network blip, provider outage) is
-          // transient — leave the subscription in place and move on.
-        }
-      })
-    );
+    await deliver(admin, subs as PushSub[], payload);
   } catch {
     // Push is an enhancement layered on top of the message that has already
     // been saved — never let a failure here surface to the sender.

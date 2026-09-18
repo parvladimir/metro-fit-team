@@ -4,7 +4,10 @@ import { revalidatePath } from 'next/cache';
 import { waitUntil } from '@vercel/functions';
 import { createClient } from '@/lib/supabase/server';
 import { requireAuthUser } from '@/lib/data/profile';
-import { notifyTeamOfNewChatMessage } from '@/lib/server/push';
+import { notifyEventOwner, notifyTeamOfNewChatMessage } from '@/lib/server/push';
+import { createAdminClient } from '@/lib/supabase/admin';
+import { cleanReply, isValidMessageId, type EventReply } from '@/lib/event-social';
+import { resolveAuthorName } from '@/lib/chat-identity';
 
 export async function sendMessageAction(formData: FormData) {
   const user = await requireAuthUser();
@@ -120,4 +123,110 @@ export async function savePushSubscriptionAction(sub: { endpoint: string; p256dh
   await supabase
     .from('push_subscriptions')
     .upsert({ user_id: user.id, endpoint: sub.endpoint, p256dh: sub.p256dh, auth: sub.auth }, { onConflict: 'endpoint' });
+}
+
+export type SupportResult = { ok: true; reacted: boolean } | { ok: false };
+
+/** Toggles the caller's "support" on an activity event. RLS restricts this to
+ * current team members acting as themselves. A push goes out only on the
+ * transition not-reacted → reacted AND only the first time this person ever
+ * supports this event (the DB keeps one notification per owner/event/actor),
+ * so toggling repeatedly can never spam the owner. */
+export async function toggleSupportAction(messageId: string): Promise<SupportResult> {
+  if (!isValidMessageId(messageId)) return { ok: false };
+  const user = await requireAuthUser();
+  const supabase = await createClient();
+
+  const { data: event } = await supabase
+    .from('messages')
+    .select('id, user_id, metadata, message_type')
+    .eq('id', messageId)
+    .maybeSingle();
+  if (!event || event.message_type !== 'system') return { ok: false };
+
+  const { data: existing } = await supabase
+    .from('message_reactions')
+    .select('id')
+    .eq('message_id', messageId)
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (existing) {
+    const { error } = await supabase.from('message_reactions').delete().eq('id', existing.id);
+    return error ? { ok: false } : { ok: true, reacted: false };
+  }
+
+  let firstTime = false;
+  if (event.user_id !== user.id) {
+    const { count } = await createAdminClient()
+      .from('notifications')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', event.user_id)
+      .eq('message_id', messageId)
+      .eq('actor_id', user.id)
+      .eq('kind', 'reaction');
+    firstTime = (count ?? 0) === 0;
+  }
+
+  const { error } = await supabase.from('message_reactions').insert({ message_id: messageId, user_id: user.id });
+  if (error && error.code !== '23505') return { ok: false };
+
+  if (!error && firstTime) {
+    const title = typeof event.metadata?.title === 'string' ? (event.metadata.title as string) : null;
+    waitUntil(notifyEventOwner({ ownerId: event.user_id, actorId: user.id, messageId, kind: 'reaction', eventTitle: title }));
+  }
+  return { ok: true, reacted: true };
+}
+
+export type EventReplyResult = { ok: true; reply: EventReply } | { ok: false; error: string };
+
+/** Adds a one-level reply to an activity event (server validates the parent
+ * again via a DB trigger) and notifies the event owner. */
+export async function sendEventReplyAction(messageId: string, rawContent: string): Promise<EventReplyResult> {
+  const content = cleanReply(rawContent);
+  if (!isValidMessageId(messageId) || !content) return { ok: false, error: 'Bitte eine Antwort eingeben.' };
+  const user = await requireAuthUser();
+  const supabase = await createClient();
+
+  const { data: event } = await supabase.from('messages').select('id, team_id, user_id, message_type').eq('id', messageId).maybeSingle();
+  if (!event || event.message_type !== 'system') return { ok: false, error: 'Antwort konnte nicht gesendet werden.' };
+
+  const { data: row, error } = await supabase
+    .from('messages')
+    .insert({ team_id: event.team_id, user_id: user.id, content, parent_message_id: messageId })
+    .select('id, created_at, profiles(full_name, avatar_url)')
+    .single();
+  if (error || !row) return { ok: false, error: 'Antwort konnte nicht gesendet werden.' };
+
+  const { data: meta } = await supabase.from('messages').select('metadata').eq('id', messageId).maybeSingle();
+  const title = typeof meta?.metadata?.title === 'string' ? (meta.metadata.title as string) : null;
+  waitUntil(notifyEventOwner({ ownerId: event.user_id, actorId: user.id, messageId, kind: 'reply', eventTitle: title, replyContent: content }));
+
+  const profile = (row as unknown as { profiles: { full_name: string | null; avatar_url: string | null } | null }).profiles;
+  return {
+    ok: true,
+    reply: {
+      id: row.id,
+      user_id: user.id,
+      content,
+      created_at: row.created_at,
+      authorName: resolveAuthorName(profile),
+      authorAvatar: profile?.avatar_url ?? null,
+    },
+  };
+}
+
+/** Marks the caller's reaction/reply notifications as read — for one event
+ * (opened via deep link) or all of them. */
+export async function markNotificationsReadAction(messageId?: string) {
+  const user = await requireAuthUser();
+  const supabase = await createClient();
+  let q = supabase
+    .from('notifications')
+    .update({ read_at: new Date().toISOString() })
+    .eq('user_id', user.id)
+    .eq('category', 'reaktion_antwort')
+    .is('read_at', null);
+  if (messageId && isValidMessageId(messageId)) q = q.eq('message_id', messageId);
+  await q;
 }

@@ -6,7 +6,7 @@ import { publicEnv } from '@/lib/env';
 import { savePushSubscriptionAction } from '@/app/(app)/team/chat/actions';
 import { t } from '@/lib/i18n';
 
-const DISMISS_KEY = 'chat-push-dismissed';
+const DISMISS_KEYS = { chat: 'chat-push-dismissed', support: 'support-push-dismissed' } as const;
 
 function urlBase64ToUint8Array(base64String: string): Uint8Array {
   const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
@@ -17,14 +17,15 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
 
 type Status = 'hidden' | 'prompt' | 'ios-install' | 'requesting';
 
-export function ChatPushPrompt() {
+export function ChatPushPrompt({ variant = 'chat' }: { variant?: 'chat' | 'support' }) {
+  const DISMISS_KEY = DISMISS_KEYS[variant];
   const [status, setStatus] = useState<Status>('hidden');
 
   useEffect(() => {
     if (!publicEnv.vapidPublicKey) return; // push not configured server-side
 
     try {
-      if (localStorage.getItem(DISMISS_KEY)) return;
+      if (localStorage.getItem(DISMISS_KEYS[variant])) return;
     } catch {
       // ignore storage access errors (private browsing, etc.)
     }
@@ -45,7 +46,7 @@ export function ChatPushPrompt() {
     if (!supportsPush || Notification.permission !== 'default') return;
 
     setStatus('prompt');
-  }, []);
+  }, [variant]);
 
   function dismiss() {
     setStatus('hidden');
@@ -87,8 +88,8 @@ export function ChatPushPrompt() {
         <Bell size={18} strokeWidth={2} />
       </span>
       <div className="flex-1">
-        <p className="text-sm font-semibold text-neutral-900">{t('push.chat.title')}</p>
-        <p className="text-xs text-neutral-400">{status === 'ios-install' ? t('push.chat.iosInstallHint') : t('push.chat.description')}</p>
+        <p className="text-sm font-semibold text-neutral-900">{t(variant === 'support' ? 'push.support.title' : 'push.chat.title')}</p>
+        <p className="text-xs text-neutral-400">{status === 'ios-install' ? t('push.chat.iosInstallHint') : t(variant === 'support' ? 'push.support.description' : 'push.chat.description')}</p>
       </div>
       {status === 'ios-install' ? (
         <button onClick={dismiss} className="btn-icon shrink-0" aria-label="Schließen">
@@ -96,7 +97,7 @@ export function ChatPushPrompt() {
         </button>
       ) : (
         <button onClick={enable} disabled={status === 'requesting'} className="btn-primary shrink-0 px-3.5 py-2 text-xs">
-          {t('push.chat.enable')}
+          {t(variant === 'support' ? 'push.support.enable' : 'push.chat.enable')}
         </button>
       )}
     </div>
