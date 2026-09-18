@@ -7,6 +7,7 @@ import clsx from 'clsx';
 import { Home, CalendarDays, Activity, Users, User } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { refreshUnread, useUnreadCount } from '@/lib/unread-store';
+import { useNotificationCount } from '@/lib/notification-store';
 import { t } from '@/lib/i18n';
 
 const ITEMS = [
@@ -20,6 +21,7 @@ const ITEMS = [
 export function BottomNav({ teamId, initialUnreadCount }: { teamId: string | null; initialUnreadCount: number }) {
   const pathname = usePathname();
   const unreadCount = useUnreadCount(initialUnreadCount);
+  const personalCount = useNotificationCount(0);
 
   // Re-read the real count from the database on every navigation (the layout
   // itself is not re-rendered by client-side navigation) and when the app
@@ -92,6 +94,13 @@ export function BottomNav({ teamId, initialUnreadCount }: { teamId: string | nul
             >
               <span className="relative">
                 <Icon size={23} strokeWidth={active ? 2.4 : 1.9} />
+                {href === '/team' && personalCount > 0 && (
+                  <span
+                    className="absolute -left-1 -top-1 h-2.5 w-2.5 rounded-full bg-brand ring-2 ring-neutral-100"
+                    role="status"
+                    aria-label="Neue Reaktionen oder Antworten"
+                  />
+                )}
                 {showBadge && (
                   <span className="absolute -right-2 -top-1.5 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-brand px-1 text-[9px] font-bold leading-none text-[#00232A]">
                     {unreadCount > 9 ? '9+' : unreadCount}

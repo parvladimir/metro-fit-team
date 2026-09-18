@@ -50,7 +50,7 @@ export async function updateNotificationPreferencesAction(formData: FormData) {
   const user = await requireAuthUser();
   const supabase = await createClient();
 
-  const categories = ['trainingserinnerung', 'wochenziel', 'messungserinnerung', 'herausforderung', 'team_aktivitaet', 'wochenzusammenfassung', 'chat_nachrichten'];
+  const categories = ['trainingserinnerung', 'wochenziel', 'messungserinnerung', 'herausforderung', 'team_aktivitaet', 'wochenzusammenfassung', 'chat_nachrichten', 'reaktionen_antworten'];
   const payload = Object.fromEntries(categories.map((c) => [c, formData.get(c) === 'on']));
 
   await supabase.from('notification_preferences').update(payload).eq('user_id', user.id);

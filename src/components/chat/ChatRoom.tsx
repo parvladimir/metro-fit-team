@@ -13,6 +13,10 @@ import { Avatar } from '@/components/ui/Avatar';
 import { resolveAuthorName, FORMER_MEMBER_LABEL } from '@/lib/chat-identity';
 import { CreatorMessageCard } from '@/components/chat/CreatorMessageCard';
 import { fetchCreators, isCreatorCardMessage } from '@/lib/creator';
+import { EventSocial } from '@/components/chat/EventSocial';
+import { addReplyOnce, applyReaction, EMPTY_SOCIAL, type EventSocial as Social } from '@/lib/event-social';
+import { toggleSupportAction, sendEventReplyAction, markNotificationsReadAction } from '@/app/(app)/team/chat/actions';
+import { refreshNotificationCount } from '@/lib/notification-store';
 import { t } from '@/lib/i18n';
 import type { ChatMessage } from '@/lib/data/chat';
 
@@ -23,13 +27,21 @@ export function ChatRoom({
   currentUserId,
   initialMessages,
   previousReadAt,
+  initialSocial,
+  focusMessageId,
 }: {
   teamId: string;
   currentUserId: string;
   initialMessages: ChatMessage[];
   previousReadAt: string | null;
+  initialSocial: Record<string, Social>;
+  focusMessageId: string | null;
 }) {
   const [messages, setMessages] = useState(initialMessages);
+  const [social, setSocial] = useState(initialSocial);
+  const [highlightId, setHighlightId] = useState<string | null>(null);
+  const updateSocial = (id: string, fn: (s: Social) => Social) =>
+    setSocial((prev) => ({ ...prev, [id]: fn(prev[id] ?? EMPTY_SOCIAL) }));
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -77,6 +89,23 @@ export function ChatRoom({
           { event: 'INSERT', schema: 'public', table: 'messages', filter: `team_id=eq.${teamId}` },
           async (payload) => {
             const row = payload.new as ChatMessage;
+            // Replies belong to an event thread: never a main-chat bubble and
+            // never counted/marked as team-chat unread.
+            if (row.parent_message_id) {
+              const { data: p } = await supabase.from('profiles').select('full_name, avatar_url').eq('id', row.user_id).maybeSingle();
+              updateSocial(row.parent_message_id, (cur) => ({
+                ...cur,
+                replies: addReplyOnce(cur.replies, {
+                  id: row.id,
+                  user_id: row.user_id,
+                  content: row.content,
+                  created_at: row.created_at,
+                  authorName: resolveAuthorName(p),
+                  authorAvatar: p?.avatar_url ?? null,
+                }),
+              }));
+              return;
+            }
             // The chat is open on screen: whatever a teammate just wrote is
             // being read right now, so keep the persisted read state current.
             if (row.user_id !== currentUserId && row.message_type !== 'system' && document.visibilityState === 'visible') {
@@ -97,6 +126,16 @@ export function ChatRoom({
             ]);
           }
         )
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'message_reactions', filter: `team_id=eq.${teamId}` }, (payload) => {
+          const r = payload.new as { message_id: string; user_id: string };
+          updateSocial(r.message_id, (cur) => ({ ...cur, reactors: applyReaction(cur.reactors, r.user_id, true) }));
+        })
+        .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'message_reactions', filter: `team_id=eq.${teamId}` }, (payload) => {
+          const r = payload.old as { message_id?: string; user_id?: string };
+          if (r.message_id && r.user_id) {
+            updateSocial(r.message_id, (cur) => ({ ...cur, reactors: applyReaction(cur.reactors, r.user_id!, false) }));
+          }
+        })
         .subscribe();
     });
 
@@ -104,7 +143,46 @@ export function ChatRoom({
       cancelled = true;
       if (channel) supabase.removeChannel(channel);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [teamId, currentUserId]);
+
+  // Deep link from a push / notification: scroll to the event, highlight it
+  // briefly, and mark that event's notifications as read.
+  useEffect(() => {
+    if (!focusMessageId) return;
+    const timer = setTimeout(() => {
+      document.getElementById(`msg-${focusMessageId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setHighlightId(focusMessageId);
+    }, 150);
+    const clear = setTimeout(() => setHighlightId(null), 3200);
+    markNotificationsReadAction(focusMessageId)
+      .then(() => refreshNotificationCount(currentUserId))
+      .catch(() => undefined);
+    return () => {
+      clearTimeout(timer);
+      clearTimeout(clear);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusMessageId]);
+
+  function toggleSupport(eventId: string) {
+    const had = (social[eventId] ?? EMPTY_SOCIAL).reactors.includes(currentUserId);
+    updateSocial(eventId, (cur) => ({ ...cur, reactors: applyReaction(cur.reactors, currentUserId, !had) }));
+    toggleSupportAction(eventId)
+      .then((res) => {
+        // Server is the source of truth: revert an optimistic change that failed.
+        if (!res.ok) updateSocial(eventId, (cur) => ({ ...cur, reactors: applyReaction(cur.reactors, currentUserId, had) }));
+        else updateSocial(eventId, (cur) => ({ ...cur, reactors: applyReaction(cur.reactors, currentUserId, res.reacted) }));
+      })
+      .catch(() => updateSocial(eventId, (cur) => ({ ...cur, reactors: applyReaction(cur.reactors, currentUserId, had) })));
+  }
+
+  async function sendReply(eventId: string, text: string): Promise<string | null> {
+    const res = await sendEventReplyAction(eventId, text);
+    if (!res.ok) return res.error;
+    updateSocial(eventId, (cur) => ({ ...cur, replies: addReplyOnce(cur.replies, res.reply) }));
+    return null;
+  }
 
   // Mark read once the chat has actually mounted with messages on screen —
   // never as a side effect of the Team page loading or a route prefetch,
@@ -221,8 +299,19 @@ export function ChatRoom({
 
             if (m.message_type === 'system') {
               return (
-                <div key={m.id}>
+                <div
+                  key={m.id}
+                  id={`msg-${m.id}`}
+                  className={`rounded-2xl transition-shadow duration-500 ${highlightId === m.id ? 'shadow-[0_0_0_2px_rgba(0,215,245,0.55)]' : ''}`}
+                >
                   <SystemEventCard message={m} isFirstUnread={m.id === firstUnreadId} label={t('chat.newMessages')} />
+                  <EventSocial
+                    social={social[m.id] ?? EMPTY_SOCIAL}
+                    currentUserId={currentUserId}
+                    ownerName={m.user_id === currentUserId ? 'dich selbst' : m.authorName.split(' ')[0] || m.authorName}
+                    onToggleSupport={() => toggleSupport(m.id)}
+                    onSendReply={(text) => sendReply(m.id, text)}
+                  />
                 </div>
               );
             }

@@ -1,11 +1,14 @@
 import Link from 'next/link';
 import clsx from 'clsx';
-import { QrCode, MessageCircle, Trophy, ChevronRight, Users } from 'lucide-react';
+import { QrCode, MessageCircle, Trophy, ChevronRight, Users, Heart } from 'lucide-react';
 import { requireAuthUser, getCurrentProfile, getPrimaryTeamMembership } from '@/lib/data/profile';
 import { getTeamRankingWithProfiles, type RankingPeriod } from '@/lib/data/team';
 import { getTeamChallenges } from '@/lib/data/challenges';
 import { getTeamActivityFeed, renderFeedItem } from '@/lib/data/feed';
-import { getUnreadChatCount } from '@/lib/data/chat';
+import { getUnreadChatCount, getRecentNotifications, getUnreadNotificationCount } from '@/lib/data/chat';
+import { NotificationCount } from '@/components/notifications/NotificationDot';
+import { ChatPushPrompt } from '@/components/chat/ChatPushPrompt';
+import { eventDeepLink, inAppNotificationText } from '@/lib/event-social';
 import { UnreadBadge } from '@/components/chat/UnreadBadge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Avatar } from '@/components/ui/Avatar';
@@ -31,11 +34,13 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
     );
   }
 
-  const [ranking, challenges, feed, unreadChatCount] = await Promise.all([
+  const [ranking, challenges, feed, unreadChatCount, notifications, notificationCount] = await Promise.all([
     getTeamRankingWithProfiles(membership.team_id, period),
     getTeamChallenges(membership.team_id, user.id),
     getTeamActivityFeed(membership.team_id, 15),
     getUnreadChatCount(membership.team_id),
+    getRecentNotifications(user.id, 4),
+    getUnreadNotificationCount(user.id),
   ]);
 
   const activeChallenge = challenges.find((c) => new Date(c.ends_at) >= new Date());
@@ -77,6 +82,38 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
           {t('challenge.title')}
         </Link>
       </div>
+
+      {notifications.length > 0 && (
+        <section className="card flex flex-col gap-2">
+          <div className="flex items-center justify-between">
+            <p className="section-title">Reaktionen & Antworten</p>
+            <NotificationCount initial={notificationCount} />
+          </div>
+          {notifications.map((n) => (
+            <Link
+              key={n.id}
+              href={n.message_id ? eventDeepLink(n.message_id) : '/team/chat'}
+              className="flex items-start gap-2.5 rounded-xl bg-neutral-50 px-3 py-2.5 transition active:scale-[0.98]"
+            >
+              {n.kind === 'reply' ? (
+                <MessageCircle size={15} className="mt-0.5 shrink-0 text-brand" />
+              ) : (
+                <Heart size={15} className="mt-0.5 shrink-0 fill-current text-brand" />
+              )}
+              <div className="min-w-0 flex-1">
+                <p className={`break-words text-sm ${n.read_at ? 'text-neutral-500' : 'font-semibold text-neutral-900'}`}>
+                  {inAppNotificationText(n.kind, n.params)}
+                </p>
+                {n.kind === 'reply' && n.params.preview && (
+                  <p className="truncate text-xs text-neutral-400">„{n.params.preview}“</p>
+                )}
+              </div>
+              {!n.read_at && <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-brand" aria-label="Ungelesen" />}
+            </Link>
+          ))}
+          <ChatPushPrompt variant="support" />
+        </section>
+      )}
 
       {/* Ranking */}
       <section className="card">

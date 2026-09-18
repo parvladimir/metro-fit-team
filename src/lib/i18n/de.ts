@@ -361,6 +361,7 @@ export const de = {
 
   // ---- notifications ------------------------------------------------------------------------
   'notification.category.chat_nachrichten': 'Chat-Nachrichten',
+  'notification.category.reaktionen_antworten': 'Reaktionen & Antworten',
   'notification.category.trainingserinnerung': 'Trainingserinnerung',
   'notification.category.wochenziel': 'Wochenziel',
   'notification.category.messungserinnerung': 'Messungserinnerung',
@@ -430,6 +431,9 @@ export const de = {
   'push.chat.description': 'Erhalte eine Benachrichtigung, wenn jemand deinem Team schreibt.',
   'push.chat.iosInstallHint': 'Füge die App zuerst zu deinem Home-Bildschirm hinzu, um Benachrichtigungen zu erhalten.',
   'push.chat.enable': 'Aktivieren',
+  'push.support.title': 'Benachrichtigungen für Team-Unterstützung aktivieren',
+  'push.support.description': 'Erhalte eine Nachricht, wenn jemand dein Training unterstützt oder darauf antwortet.',
+  'push.support.enable': 'Benachrichtigungen aktivieren',
 } as const;
 
 export type TranslationKey = keyof typeof de;

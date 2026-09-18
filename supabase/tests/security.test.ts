@@ -477,4 +477,106 @@ describeIntegration('Row Level Security', () => {
     const mine = (read.data ?? []).map((r) => r.user_id);
     expect(mine).not.toContain(userB.id);
   });
+  describe('event reactions & replies', () => {
+    let eventId: string;
+    let humanId: string;
+
+    beforeAll(async () => {
+      const { data: ev } = await admin
+        .from('messages')
+        .insert({ team_id: teamId, user_id: userA.id, content: 'hat ein Training gestartet', message_type: 'system', event_type: 'workout_started', metadata: { title: 'Beine' } })
+        .select('id')
+        .single();
+      eventId = ev!.id;
+      const { data: h } = await admin.from('messages').insert({ team_id: teamId, user_id: userA.id, content: 'normal' }).select('id').single();
+      humanId = h!.id;
+    });
+
+    it('30. a member can support an event once; count is 1; owner gets exactly one in-app notification', async () => {
+      const r = await userB.client.from('message_reactions').insert({ message_id: eventId, user_id: userB.id });
+      expect(r.error).toBeNull();
+      const dup = await userB.client.from('message_reactions').insert({ message_id: eventId, user_id: userB.id });
+      expect(dup.error).not.toBeNull();
+
+      const { data: n } = await admin.from('notifications').select('kind, actor_id, category').eq('user_id', userA.id).eq('message_id', eventId);
+      expect(n).toHaveLength(1);
+      expect(n![0]).toMatchObject({ kind: 'reaction', actor_id: userB.id, category: 'reaktion_antwort' });
+    });
+
+    it('31. removing and re-adding the reaction does not create another notification (no spam)', async () => {
+      await userB.client.from('message_reactions').delete().eq('message_id', eventId).eq('user_id', userB.id);
+      const { data: mid } = await userB.client.from('message_reactions').select('id').eq('message_id', eventId);
+      expect(mid).toEqual([]);
+      await userB.client.from('message_reactions').insert({ message_id: eventId, user_id: userB.id });
+      const { data: n } = await admin.from('notifications').select('id').eq('user_id', userA.id).eq('message_id', eventId).eq('kind', 'reaction');
+      expect(n).toHaveLength(1);
+    });
+
+    it('32. reacting to your own event creates no notification', async () => {
+      await userA.client.from('message_reactions').insert({ message_id: eventId, user_id: userA.id });
+      const { data: n } = await admin.from('notifications').select('id').eq('user_id', userA.id).eq('actor_id', userA.id);
+      expect(n).toEqual([]);
+    });
+
+    it('33. cannot react as someone else, on a human message, or as an outsider; outsider cannot read reactions', async () => {
+      const forge = await userB.client.from('message_reactions').insert({ message_id: eventId, user_id: userA.id });
+      expect(forge.error).not.toBeNull();
+      const human = await userB.client.from('message_reactions').insert({ message_id: humanId, user_id: userB.id });
+      expect(human.error).not.toBeNull();
+      const out = await outsider.client.from('message_reactions').insert({ message_id: eventId, user_id: outsider.id });
+      expect(out.error).not.toBeNull();
+      const seen = await outsider.client.from('message_reactions').select('id').eq('message_id', eventId);
+      expect(seen.data).toEqual([]);
+      // a member cannot delete someone else's reaction
+      const del = await userB.client.from('message_reactions').delete().eq('message_id', eventId).eq('user_id', userA.id).select('id');
+      expect(del.data ?? []).toEqual([]);
+    });
+
+    it('34. replies: one level only, only on events, only team members; owner is notified; not counted as chat unread', async () => {
+      await userA.client.from('team_message_read_state').upsert(
+        { user_id: userA.id, team_id: teamId, last_read_at: new Date().toISOString() },
+        { onConflict: 'user_id,team_id' }
+      );
+      const before = Number((await userA.client.rpc('get_unread_chat_count', { p_team_id: teamId })).data);
+
+      const ok = await userB.client.from('messages').insert({ team_id: teamId, user_id: userB.id, content: 'Stark!', parent_message_id: eventId }).select('id').single();
+      expect(ok.error).toBeNull();
+
+      const nested = await userB.client.from('messages').insert({ team_id: teamId, user_id: userB.id, content: 'nested', parent_message_id: ok.data!.id });
+      expect(nested.error).not.toBeNull();
+      const onHuman = await userB.client.from('messages').insert({ team_id: teamId, user_id: userB.id, content: 'no', parent_message_id: humanId });
+      expect(onHuman.error).not.toBeNull();
+      const forged = await userB.client.from('messages').insert({ team_id: teamId, user_id: userA.id, content: 'as A', parent_message_id: eventId });
+      expect(forged.error).not.toBeNull();
+      const crossTeam = await outsider.client.from('messages').insert({ team_id: outsiderTeamId, user_id: outsider.id, content: 'x', parent_message_id: eventId });
+      expect(crossTeam.error).not.toBeNull();
+      const asOutsiderIntoTeam = await outsider.client.from('messages').insert({ team_id: teamId, user_id: outsider.id, content: 'x', parent_message_id: eventId });
+      expect(asOutsiderIntoTeam.error).not.toBeNull();
+
+      const { data: n } = await admin.from('notifications').select('kind, params').eq('user_id', userA.id).eq('message_id', eventId).eq('kind', 'reply');
+      expect(n).toHaveLength(1);
+      expect((n![0]!.params as { preview: string }).preview).toBe('Stark!');
+
+      const after = Number((await userA.client.rpc('get_unread_chat_count', { p_team_id: teamId })).data);
+      expect(after).toBe(before);
+    });
+
+    it('35. outsiders cannot read replies; replying to your own event does not self-notify', async () => {
+      const seen = await outsider.client.from('messages').select('id').eq('parent_message_id', eventId);
+      expect(seen.data).toEqual([]);
+      const own = await userA.client.from('messages').insert({ team_id: teamId, user_id: userA.id, content: 'Danke', parent_message_id: eventId });
+      expect(own.error).toBeNull();
+      const { data: n } = await admin.from('notifications').select('id').eq('user_id', userA.id).eq('actor_id', userA.id);
+      expect(n).toEqual([]);
+    });
+
+    it('36. notification preference column exists (default on) and a member can only mark their own notifications read', async () => {
+      const pref = await userA.client.from('notification_preferences').select('reaktionen_antworten').eq('user_id', userA.id).single();
+      expect(pref.data?.reaktionen_antworten).toBe(true);
+      const foreign = await userB.client.from('notifications').update({ read_at: new Date().toISOString() }).eq('user_id', userA.id).select('id');
+      expect(foreign.data ?? []).toEqual([]);
+      const own = await userA.client.from('notifications').update({ read_at: new Date().toISOString() }).eq('user_id', userA.id).is('read_at', null).select('id');
+      expect((own.data ?? []).length).toBeGreaterThan(0);
+    });
+  });
 });
