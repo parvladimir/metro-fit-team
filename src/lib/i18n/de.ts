@@ -334,6 +334,14 @@ export const de = {
   'profile.dataExport': 'Daten exportieren',
   'profile.deleteAccount': 'Konto löschen',
   'profile.deleteAccount.confirm': 'Möchtest du dein Konto und alle Daten wirklich unwiderruflich löschen?',
+  'profile.avatar.uploading': 'Profilbild wird hochgeladen …',
+  'profile.avatar.updated': 'Profilbild aktualisiert',
+  'profile.avatar.failed': 'Upload fehlgeschlagen. Bitte versuche es erneut.',
+  'profile.editProfile.title': 'Profil bearbeiten',
+  'profile.editProfile.name': 'Name',
+  'profile.editProfile.saved': 'Änderungen gespeichert.',
+  'profile.footer.credit': 'Created by Volodymyr Parashchak',
+  'profile.footer.contact': 'Bei Fragen oder Vorschlägen:',
 
   // ---- achievements ------------------------------------------------------------------------
   'achievements.firstWorkout.title': 'Erstes Training',

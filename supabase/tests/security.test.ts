@@ -124,4 +124,95 @@ describeIntegration('Row Level Security', () => {
     expect(error).toBeNull();
     expect(data).toEqual([]);
   });
+
+  async function createInvite(overrides: Record<string, unknown> = {}) {
+    const token = 'invite-flow-token-' + Date.now() + '-' + Math.round(Math.random() * 1e6);
+    const { createHash } = await import('node:crypto');
+    const tokenHash = createHash('sha256').update(token).digest('hex');
+
+    const { data, error } = await admin
+      .from('team_invites')
+      .insert({ team_id: teamId, token_hash: tokenHash, created_by: userA.id, ...overrides })
+      .select('id')
+      .single();
+    if (error) throw error;
+
+    return { token, inviteId: data!.id as string };
+  }
+
+  it('7. redeeming a valid invite creates a membership row with role=member (never team_admin)', async () => {
+    const joiner = await createTestUser('joiner-fresh');
+    const { token, inviteId } = await createInvite();
+
+    const { data, error } = await joiner.client.rpc('redeem_team_invite', { p_token: token });
+    const result = Array.isArray(data) ? data[0] : data;
+
+    expect(error).toBeNull();
+    expect(result.already_member).toBe(false);
+    expect(result.team_id).toBe(teamId);
+
+    const { data: membership } = await admin
+      .from('team_members')
+      .select('role')
+      .eq('team_id', teamId)
+      .eq('user_id', joiner.id)
+      .single();
+    expect(membership!.role).toBe('member');
+
+    const { data: invite } = await admin.from('team_invites').select('use_count').eq('id', inviteId).single();
+    expect(invite!.use_count).toBe(1);
+
+    await admin.auth.admin.deleteUser(joiner.id).catch(() => undefined);
+  });
+
+  it('8. redeeming an already-joined invite is idempotent (no duplicate row, use_count unchanged)', async () => {
+    const joiner = await createTestUser('joiner-idempotent');
+    const { token, inviteId } = await createInvite();
+
+    const first = await joiner.client.rpc('redeem_team_invite', { p_token: token });
+    expect(first.error).toBeNull();
+
+    const second = await joiner.client.rpc('redeem_team_invite', { p_token: token });
+    const secondResult = Array.isArray(second.data) ? second.data[0] : second.data;
+    expect(second.error).toBeNull();
+    expect(secondResult.already_member).toBe(true);
+
+    const { data: memberships } = await admin
+      .from('team_members')
+      .select('id')
+      .eq('team_id', teamId)
+      .eq('user_id', joiner.id);
+    expect(memberships).toHaveLength(1);
+
+    const { data: invite } = await admin.from('team_invites').select('use_count').eq('id', inviteId).single();
+    expect(invite!.use_count).toBe(1); // second redemption must NOT increment use_count again
+
+    await admin.auth.admin.deleteUser(joiner.id).catch(() => undefined);
+  });
+
+  it('9. an expired invite cannot be redeemed', async () => {
+    const { token } = await createInvite({ expires_at: new Date(Date.now() - 60_000).toISOString() });
+
+    const { error } = await outsider.client.rpc('redeem_team_invite', { p_token: token });
+    expect(error).not.toBeNull();
+    expect(error!.message).toContain('invite_expired');
+  });
+
+  it('10. an invite cannot be redeemed beyond its max_uses limit', async () => {
+    const joiner = await createTestUser('joiner-maxuses');
+    const { token } = await createInvite({ max_uses: 1, use_count: 1 });
+
+    const { error } = await joiner.client.rpc('redeem_team_invite', { p_token: token });
+    expect(error).not.toBeNull();
+    expect(error!.message).toContain('invite_exhausted');
+
+    const { data: membership } = await admin
+      .from('team_members')
+      .select('id')
+      .eq('team_id', teamId)
+      .eq('user_id', joiner.id);
+    expect(membership).toEqual([]); // failed redemption must not create membership
+
+    await admin.auth.admin.deleteUser(joiner.id).catch(() => undefined);
+  });
 });

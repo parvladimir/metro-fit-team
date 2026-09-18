@@ -27,20 +27,17 @@ export default async function DashboardPage() {
       {/* DEINE WOCHE — hero ring, Steps-app style: one big friendly number first */}
       <section className="card flex flex-col items-center pt-6 text-center">
         <p className="section-title mb-4">{t('dashboard.yourWeek')}</p>
-        <div className="relative flex h-40 w-40 shrink-0 items-center justify-center">
-          <ProgressRing percent={goalPercent} size={160} strokeWidth={14} />
-          <div className="absolute flex flex-col items-center">
-            <span className="text-5xl font-extrabold tracking-tight text-neutral-900">{Math.round(goalPercent)}%</span>
-            <span className="mt-1 text-xs font-medium text-neutral-400">
-              {t('dashboard.workoutsOfGoal', { completed: data.weekly.completedWorkouts, goal: data.weekly.weeklyGoal })}
-            </span>
-          </div>
-        </div>
+        <ProgressRing
+          percent={goalPercent}
+          size={160}
+          strokeWidth={9}
+          label={t('dashboard.workoutsOfGoal', { completed: data.weekly.completedWorkouts, goal: data.weekly.weeklyGoal })}
+        />
 
         {data.weekly.pointsDeltaPct !== null && (
           <span
             className={`mt-4 inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold ${
-              data.weekly.pointsDeltaPct >= 0 ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-500'
+              data.weekly.pointsDeltaPct >= 0 ? 'bg-emerald-500/15 text-emerald-400' : 'bg-red-500/15 text-red-400'
             }`}
           >
             {t('dashboard.vsLastWeek', { delta: `${data.weekly.pointsDeltaPct >= 0 ? '+' : ''}${data.weekly.pointsDeltaPct}%` })}
@@ -48,11 +45,11 @@ export default async function DashboardPage() {
         )}
 
         <div className="mt-5 grid w-full grid-cols-2 gap-3">
-          <div className="rounded-2xl bg-[#faf5f1] px-3 py-3">
+          <div className="rounded-2xl bg-neutral-150 px-3 py-3">
             <p className="text-2xl font-bold text-neutral-900">{data.weekly.minutes}</p>
             <p className="text-xs font-medium text-neutral-400">{t('common.minutes')}</p>
           </div>
-          <div className="rounded-2xl bg-[#faf5f1] px-3 py-3">
+          <div className="rounded-2xl bg-neutral-150 px-3 py-3">
             <p className="text-2xl font-bold text-neutral-900">{data.weekly.points}</p>
             <p className="text-xs font-medium text-neutral-400">{t('common.points')}</p>
           </div>
@@ -68,7 +65,7 @@ export default async function DashboardPage() {
         {/* DEIN TEAM */}
         <Link href="/team" className="card flex flex-col justify-between transition active:scale-[0.98]">
           <div className="flex items-center gap-2">
-            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#faf5f1] text-base">🏅</span>
+            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-neutral-150 text-base">🏅</span>
             <p className="section-title">{t('dashboard.yourTeam')}</p>
           </div>
           <p className="mt-3 text-3xl font-extrabold tracking-tight text-neutral-900">
@@ -80,7 +77,7 @@ export default async function DashboardPage() {
         {/* HERAUSFORDERUNG */}
         <Link href="/team?tab=herausforderungen" className="card flex flex-col justify-between transition active:scale-[0.98]">
           <div className="flex items-center gap-2">
-            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#faf5f1] text-base">🏆</span>
+            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-neutral-150 text-base">🏆</span>
             <p className="section-title">{t('dashboard.challenge')}</p>
           </div>
           {data.activeChallenge ? (

@@ -49,7 +49,7 @@ export default async function PlanDayPage({ params }: { params: Promise<{ weekda
 
       {day && (
         <form action={deleteDay.bind(null, day.id, weekday)}>
-          <button type="submit" className="btn-ghost text-red-600">{t('plan.removeDay')}</button>
+          <button type="submit" className="btn-ghost text-red-400">{t('plan.removeDay')}</button>
         </form>
       )}
 
@@ -67,7 +67,7 @@ export default async function PlanDayPage({ params }: { params: Promise<{ weekda
                     </p>
                   </div>
                   <form action={removeExercise.bind(null, pe.id, weekday)}>
-                    <button type="submit" className="btn-ghost px-3 py-2 text-xs text-red-600">{t('common.delete')}</button>
+                    <button type="submit" className="btn-ghost px-3 py-2 text-xs text-red-400">{t('common.delete')}</button>
                   </form>
                 </div>
               ))

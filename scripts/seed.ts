@@ -24,6 +24,20 @@ function daysAgo(n: number) {
   return new Date(Date.now() - n * 24 * 60 * 60 * 1000);
 }
 
+/** Monday 00:00 of the current ISO week — challenges tracking "this week"
+ * must share this exact window with the weekly-goal logic (workouts.ts /
+ * the handle_workout_status_change trigger), or the dashboard's "X von Y
+ * Trainings" and a "this week" challenge's progress will legitimately
+ * disagree despite both being correct for their own (different) windows. */
+function startOfIsoWeek(): Date {
+  const now = new Date();
+  const day = now.getDay() || 7; // Sunday = 0 -> 7
+  const monday = new Date(now);
+  monday.setDate(now.getDate() - (day - 1));
+  monday.setHours(0, 0, 0, 0);
+  return monday;
+}
+
 async function ensureUser(admin: ReturnType<typeof getAdminClient>, email: string, fullName: string) {
   const password = randomPassword();
   const { data, error } = await admin.auth.admin.createUser({
@@ -71,7 +85,10 @@ async function main() {
     teamId = newTeam.id;
   }
 
-  await admin.from('team_members').upsert({ team_id: teamId, user_id: thorsten.id, role: 'team_admin' }, { onConflict: 'team_id,user_id' });
+  const { error: thorstenMembershipError } = await admin
+    .from('team_members')
+    .upsert({ team_id: teamId, user_id: thorsten.id, role: 'team_admin' }, { onConflict: 'team_id,user_id' });
+  if (thorstenMembershipError) throw new Error(`Failed to add Thorsten to team_members: ${thorstenMembershipError.message}`);
   await admin.from('profiles').update({ full_name: 'Thorsten Roloff', onboarding_completed_at: new Date().toISOString(), weekly_goal: 4, fitness_goal: 'stay_fit' }).eq('id', thorsten.id);
 
   const credentials: { name: string; email: string; password: string | null }[] = [
@@ -82,7 +99,15 @@ async function main() {
 
   for (const member of DEMO_MEMBERS) {
     const user = await ensureUser(admin, member.email, member.name);
-    await admin.from('team_members').upsert({ team_id: teamId, user_id: user.id, role: 'member' }, { onConflict: 'team_id,user_id' });
+    const { error: membershipError } = await admin
+      .from('team_members')
+      .upsert({ team_id: teamId, user_id: user.id, role: 'member' }, { onConflict: 'team_id,user_id' });
+    // Never continue silently on this one — a member who exists as an auth
+    // user/profile but never actually joins team_members is invisible to
+    // RLS-scoped team queries (roster, ranking) while still accumulating
+    // fitness_score_events, which is exactly how a past seed run produced
+    // a ranking with real point totals next to blank names.
+    if (membershipError) throw new Error(`Failed to add ${member.name} to team_members: ${membershipError.message}`);
     await admin
       .from('profiles')
       .update({ full_name: member.name, onboarding_completed_at: new Date().toISOString(), weekly_goal: member.weeklyGoal, fitness_goal: member.goal })
@@ -185,6 +210,12 @@ async function main() {
   }
 
   // ---- team challenge -------------------------------------------------------
+  // Window MUST be the calendar week (Monday..Sunday) to match the
+  // dashboard's own "X von Y Trainings" weekly-goal window — otherwise the
+  // two numbers legitimately measure different periods and look like a bug.
+  const weekStart = startOfIsoWeek();
+  const weekEnd = new Date(weekStart.getTime() + 7 * 24 * 60 * 60 * 1000 - 1);
+
   const { data: challenge } = await admin
     .from('challenges')
     .insert({
@@ -194,8 +225,8 @@ async function main() {
       challenge_type: 'individual',
       metric: 'workouts_count',
       target_value: 4,
-      starts_at: daysAgo(2).toISOString().slice(0, 10),
-      ends_at: daysAgo(-5).toISOString().slice(0, 10),
+      starts_at: weekStart.toISOString().slice(0, 10),
+      ends_at: weekEnd.toISOString().slice(0, 10),
       points_reward: 100,
       created_by: thorsten.id,
     })
@@ -203,9 +234,19 @@ async function main() {
     .single();
 
   if (challenge) {
-    for (const [i, member] of memberIds.entries()) {
+    for (const member of memberIds) {
+      // Real progress, computed from the same seeded workouts — never an
+      // invented number — so it always agrees with the dashboard.
+      const { count } = await admin
+        .from('workouts')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', member.id)
+        .eq('status', 'abgeschlossen')
+        .gte('finished_at', weekStart.toISOString())
+        .lte('finished_at', weekEnd.toISOString());
+
       await admin.from('challenge_participants').upsert(
-        { challenge_id: challenge.id, user_id: member.id, progress_value: Math.min(4, i + 1) },
+        { challenge_id: challenge.id, user_id: member.id, progress_value: count ?? 0 },
         { onConflict: 'challenge_id,user_id' }
       );
     }

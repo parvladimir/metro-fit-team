@@ -36,7 +36,7 @@ export function SignInForm({ next }: { next: string }) {
         </Link>
         <p className="text-neutral-500">
           {t('auth.signIn.noAccount')}{' '}
-          <Link href="/registrieren" className="font-semibold text-brand">
+          <Link href={`/registrieren?next=${encodeURIComponent(next)}`} className="font-semibold text-brand">
             {t('auth.signIn.createAccount')}
           </Link>
         </p>

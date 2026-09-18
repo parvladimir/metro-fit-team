@@ -40,7 +40,7 @@ export function JoinTeamCard({ token, teamName, valid }: { token: string; teamNa
       <h1 className="text-xl font-bold text-neutral-900">{t('team.joinPrompt.title', { teamName: teamName || '' })}</h1>
       <p className="text-sm text-neutral-500">{t('team.joinPrompt.description')}</p>
 
-      {message && <p className="text-sm font-medium text-emerald-600">{message}</p>}
+      {message && <p className="text-sm font-medium text-emerald-400">{message}</p>}
 
       {status !== 'done' && (
         <button onClick={handleJoin} disabled={status === 'joining'} className="btn-primary w-full">

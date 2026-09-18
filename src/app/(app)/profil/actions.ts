@@ -6,6 +6,30 @@ import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { requireAuthUser } from '@/lib/data/profile';
 
+export async function updateProfileAction(formData: FormData) {
+  const user = await requireAuthUser();
+  const supabase = await createClient();
+
+  const fullName = String(formData.get('fullName') || '').trim();
+  const fitnessGoal = String(formData.get('fitnessGoal') || '');
+  const weeklyGoal = Number(formData.get('weeklyGoal') || 3);
+
+  if (!fullName) return;
+
+  await supabase
+    .from('profiles')
+    .update({
+      full_name: fullName,
+      fitness_goal: fitnessGoal || null,
+      weekly_goal: Math.min(7, Math.max(1, weeklyGoal)),
+    })
+    .eq('id', user.id);
+
+  revalidatePath('/profil');
+  revalidatePath('/profil/bearbeiten');
+  redirect('/profil');
+}
+
 export async function updatePrivacySettingsAction(formData: FormData) {
   const user = await requireAuthUser();
   const supabase = await createClient();

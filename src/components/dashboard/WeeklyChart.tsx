@@ -1,22 +1,33 @@
 'use client';
 
-import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis } from 'recharts';
-
+// Deliberately not using Recharts here: this is a 7-bar sparkline on the
+// most-visited page in the app, and pulling in a full charting library's
+// runtime just for that added real weight to the dashboard's JS bundle.
+// A plain animated SVG does the same job for a fraction of the bytes.
 export function WeeklyChart({ data }: { data: { label: string; minutes: number }[] }) {
+  const max = Math.max(1, ...data.map((d) => d.minutes));
+
   return (
-    <div className="h-32 w-full">
-      <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={data} margin={{ top: 4, right: 0, bottom: 0, left: 0 }}>
-          <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#9ca3af' }} />
-          <Tooltip
-            cursor={{ fill: 'rgba(255,90,31,0.08)' }}
-            contentStyle={{ borderRadius: 12, border: 'none', boxShadow: '0 4px 16px rgba(0,0,0,0.1)', fontSize: 12 }}
-            formatter={(value: number) => [`${value} Min.`, 'Training']}
-            labelFormatter={() => ''}
-          />
-          <Bar dataKey="minutes" radius={[6, 6, 6, 6]} fill="#FF5A1F" maxBarSize={22} />
-        </BarChart>
-      </ResponsiveContainer>
+    <div className="flex h-28 items-end gap-2">
+      {data.map((d) => {
+        const heightPct = d.minutes > 0 ? Math.max(6, (d.minutes / max) * 100) : 3;
+        return (
+          <div key={d.label} className="flex flex-1 flex-col items-center gap-1.5">
+            <div className="flex h-20 w-full items-end justify-center">
+              <div
+                className="w-2.5 rounded-full bg-brand transition-[height] duration-500 ease-out"
+                style={{
+                  height: `${heightPct}%`,
+                  boxShadow: d.minutes > 0 ? '0 0 6px rgba(0, 215, 245, 0.4)' : undefined,
+                  opacity: d.minutes > 0 ? 1 : 0.25,
+                }}
+                title={`${d.minutes} Min.`}
+              />
+            </div>
+            <span className="text-[11px] font-medium text-neutral-500">{d.label}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }

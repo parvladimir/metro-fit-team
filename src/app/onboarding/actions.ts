@@ -18,7 +18,6 @@ export async function completeOnboardingAction(_prev: OnboardingState, formData:
   const fullName = String(formData.get('fullName') || '').trim();
   const goal = String(formData.get('fitnessGoal') || '') as FitnessGoal;
   const weeklyGoal = Number(formData.get('weeklyGoal') || 3);
-  const avatarUrl = String(formData.get('avatarUrl') || '') || null;
   const heightRaw = String(formData.get('height') || '').trim();
   const weightRaw = String(formData.get('weight') || '').trim();
   const ageRaw = String(formData.get('age') || '').trim();
@@ -36,7 +35,6 @@ export async function completeOnboardingAction(_prev: OnboardingState, formData:
     .from('profiles')
     .update({
       full_name: fullName,
-      avatar_url: avatarUrl,
       fitness_goal: goal,
       weekly_goal: weeklyGoal,
       height_cm: height,

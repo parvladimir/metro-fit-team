@@ -38,7 +38,7 @@ function TabLink({ href, active, label }: { href: string; active: boolean; label
       href={href}
       className={clsx(
         'flex-1 rounded-xl py-2 text-center text-sm font-semibold transition',
-        active ? 'bg-white text-neutral-900 shadow-sm' : 'text-neutral-500'
+        active ? 'bg-neutral-100 text-neutral-900 shadow-sm' : 'text-neutral-500'
       )}
     >
       {label}

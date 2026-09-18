@@ -21,7 +21,7 @@ export default async function ChatPage() {
 
   return (
     <div className="flex h-[calc(100vh-56px)] flex-col">
-      <div className="flex items-center gap-3 border-b border-neutral-200 bg-white px-4 py-3">
+      <div className="flex items-center gap-3 border-b border-neutral-200 bg-neutral-100 px-4 py-3">
         <Link href="/team" className="text-2xl text-neutral-400">‹</Link>
         <h1 className="text-lg font-bold text-neutral-900">{membership.team_name}</h1>
       </div>

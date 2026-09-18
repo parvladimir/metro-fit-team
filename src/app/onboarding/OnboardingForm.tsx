@@ -4,7 +4,7 @@ import { useFormState } from 'react-dom';
 import { completeOnboardingAction } from './actions';
 import { SubmitButton } from '@/components/ui/SubmitButton';
 import { FormMessage } from '@/components/ui/FormMessage';
-import { AvatarUploader } from '@/components/onboarding/AvatarUploader';
+import { AvatarEditor } from '@/components/profile/AvatarEditor';
 import { t } from '@/lib/i18n';
 import type { FitnessGoal } from '@/types/database';
 import { appConfig } from '@/lib/config';
@@ -23,7 +23,7 @@ export function OnboardingForm({ userId, defaultFullName }: { userId: string; de
         <p className="mt-1 text-sm text-neutral-500">{t('onboarding.welcome.description')}</p>
       </div>
 
-      <AvatarUploader userId={userId} />
+      <AvatarEditor userId={userId} name={defaultFullName} initialUrl={null} />
 
       <div>
         <label className="label" htmlFor="fullName">{t('onboarding.name.label')}</label>
@@ -36,7 +36,7 @@ export function OnboardingForm({ userId, defaultFullName }: { userId: string; de
           {GOALS.map((goal, i) => (
             <label
               key={goal}
-              className="flex cursor-pointer items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3 py-3 text-sm font-medium has-[:checked]:border-brand has-[:checked]:bg-brand-50 has-[:checked]:text-brand-700"
+              className="flex cursor-pointer items-center gap-2 rounded-xl border border-neutral-200 bg-neutral-100 px-3 py-3 text-sm font-medium has-[:checked]:border-brand has-[:checked]:bg-brand-50 has-[:checked]:text-brand"
             >
               <input type="radio" name="fitnessGoal" value={goal} defaultChecked={i === 0} className="accent-brand" required />
               {t(`onboarding.goal.${goal}` as const)}

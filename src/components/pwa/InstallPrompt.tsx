@@ -53,11 +53,11 @@ export function InstallPrompt() {
   }
 
   return (
-    <div className="mx-4 mb-3 flex items-center gap-3 rounded-2xl bg-neutral-900 px-4 py-3 text-white">
+    <div className="card mx-4 mb-3 flex items-center gap-3 !py-3">
       <span className="text-xl">📲</span>
       <div className="flex-1">
-        <p className="text-sm font-semibold">{t('pwa.installTitle', { appName: appConfig.name })}</p>
-        <p className="text-xs text-neutral-300">{isIos ? t('pwa.installIos') : t('pwa.installDescription')}</p>
+        <p className="text-sm font-semibold text-neutral-900">{t('pwa.installTitle', { appName: appConfig.name })}</p>
+        <p className="text-xs text-neutral-400">{isIos ? t('pwa.installIos') : t('pwa.installDescription')}</p>
       </div>
       {!isIos && deferredPrompt ? (
         <button
@@ -65,7 +65,7 @@ export function InstallPrompt() {
             await deferredPrompt.prompt();
             dismiss();
           }}
-          className="shrink-0 rounded-xl bg-brand px-3 py-2 text-xs font-semibold"
+          className="shrink-0 rounded-xl bg-brand px-3 py-2 text-xs font-semibold text-[#00232A]"
         >
           {t('pwa.installAndroid')}
         </button>
