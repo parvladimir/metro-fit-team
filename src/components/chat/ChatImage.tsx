@@ -12,11 +12,14 @@ export function ChatImage({
   thumbPath,
   width,
   height,
+  fluid = false,
 }: {
   path: string;
   thumbPath: string | null;
   width: number | null;
   height: number | null;
+  /** Fill the parent (creator card) instead of the fixed bubble width. */
+  fluid?: boolean;
 }) {
   const [thumbUrl, setThumbUrl] = useState<string | null>(null);
   const [fullUrl, setFullUrl] = useState<string | null>(null);
@@ -53,7 +56,7 @@ export function ChatImage({
         type="button"
         onClick={openFull}
         style={{ aspectRatio: ratio }}
-        className="relative block w-[min(64vw,260px)] overflow-hidden rounded-2xl bg-neutral-150"
+        className={`relative block overflow-hidden rounded-2xl bg-neutral-150 ${fluid ? 'w-full' : 'w-[min(64vw,260px)]'}`}
         aria-label="Bild vergrößern"
       >
         {failed ? (

@@ -6,6 +6,7 @@ const config: Config = {
   theme: {
     extend: {
       fontFamily: {
+        creator: ['var(--font-creator)', 'var(--font-sans)', 'system-ui', 'sans-serif'],
         sans: ['var(--font-sans)', 'system-ui', '-apple-system', 'Segoe UI', 'Roboto', 'sans-serif'],
       },
       colors: {

@@ -467,4 +467,14 @@ describeIntegration('Row Level Security', () => {
     const asAnon = await createClient(SUPABASE_URL, ANON_KEY).from('password_reset_requests').insert({ email_hash: 'x' });
     expect(asAnon.error).not.toBeNull();
   });
+  it('29. platform_creators: readable by members, not writable by any client, keyed by id (namesake gets nothing)', async () => {
+    const read = await userB.client.from('platform_creators').select('user_id');
+    expect(read.error).toBeNull();
+    const selfInsert = await userB.client.from('platform_creators').insert({ user_id: userB.id, display_name: 'Volodymyr Parashchak' });
+    expect(selfInsert.error).not.toBeNull();
+    const anon = await createClient(SUPABASE_URL, ANON_KEY).from('platform_creators').select('user_id');
+    expect(anon.data ?? []).toEqual([]);
+    const mine = (read.data ?? []).map((r) => r.user_id);
+    expect(mine).not.toContain(userB.id);
+  });
 });
