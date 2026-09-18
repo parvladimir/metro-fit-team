@@ -1,11 +1,12 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import clsx from 'clsx';
 import { Home, CalendarDays, Activity, Users, User } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
+import { refreshUnread, useUnreadCount } from '@/lib/unread-store';
 import { t } from '@/lib/i18n';
 
 const ITEMS = [
@@ -18,18 +19,28 @@ const ITEMS = [
 
 export function BottomNav({ teamId, initialUnreadCount }: { teamId: string | null; initialUnreadCount: number }) {
   const pathname = usePathname();
-  const [unreadCount, setUnreadCount] = useState(initialUnreadCount);
+  const unreadCount = useUnreadCount(initialUnreadCount);
 
-  // The server recomputes this on every navigation (AppLayout re-runs), so
-  // sync whenever the prop changes — BottomNav itself never remounts across
-  // client-side navigations within the (app) layout.
+  // Re-read the real count from the database on every navigation (the layout
+  // itself is not re-rendered by client-side navigation) and when the app
+  // regains focus (e.g. reopened PWA, another device read the chat).
   useEffect(() => {
-    setUnreadCount(initialUnreadCount);
-  }, [initialUnreadCount]);
+    void refreshUnread(teamId);
+  }, [teamId, pathname]);
 
-  // Keep the badge live while the app stays open on some other screen —
-  // increment on any new message that isn't the viewer's own, without
-  // waiting for the next navigation to refetch the server-computed count.
+  useEffect(() => {
+    const onFocus = () => void refreshUnread(teamId);
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
+    };
+  }, [teamId]);
+
+  // Live updates: any new HUMAN message from someone else triggers a fresh
+  // count from the database (system events and own messages never count —
+  // the RPC enforces that, this filter just avoids pointless round trips).
   useEffect(() => {
     if (!teamId) return;
     const supabase = createClient();
@@ -47,12 +58,9 @@ export function BottomNav({ teamId, initialUnreadCount }: { teamId: string | nul
           'postgres_changes',
           { event: 'INSERT', schema: 'public', table: 'messages', filter: `team_id=eq.${teamId}` },
           (payload) => {
-            const row = payload.new as { user_id: string };
-            if (row.user_id === myUserId) return;
-            // Don't inflate the badge while the user is already looking at
-            // the chat — that view marks itself read right away anyway.
-            if (window.location.pathname === '/team/chat') return;
-            setUnreadCount((c) => c + 1);
+            const row = payload.new as { user_id: string; message_type?: string };
+            if (row.user_id === myUserId || row.message_type === 'system') return;
+            void refreshUnread(teamId);
           }
         )
         .subscribe();

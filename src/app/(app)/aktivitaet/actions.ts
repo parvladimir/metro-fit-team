@@ -4,7 +4,9 @@ import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { createClient } from '@/lib/supabase/server';
 import { requireAuthUser, getPrimaryTeamMembership } from '@/lib/data/profile';
-import type { ActivityType } from '@/types/database';
+import { parseDuration } from '@/lib/workout-metrics';
+import { normalizeExerciseType } from '@/lib/exercise-types';
+import type { ActivityType, ExerciseType } from '@/types/database';
 
 export async function createWorkoutAction(formData: FormData) {
   const user = await requireAuthUser();
@@ -12,9 +14,16 @@ export async function createWorkoutAction(formData: FormData) {
   const membership = await getPrimaryTeamMembership(user.id);
 
   const activityType = String(formData.get('activityType') || 'krafttraining') as ActivityType;
-  const title = String(formData.get('title') || '').trim() || null;
+  let title = String(formData.get('title') || '').trim() || null;
   const planDayId = String(formData.get('planDayId') || '') || null;
   const today = new Date().toISOString().slice(0, 10);
+
+  // Starting from a plan day: default the title to the day's title and later
+  // copy its exercises into the new workout.
+  if (planDayId && !title) {
+    const { data: day } = await supabase.from('workout_plan_days').select('title').eq('id', planDayId).maybeSingle();
+    title = day?.title?.trim() || null;
+  }
 
   const { data, error } = await supabase
     .from('workouts')
@@ -32,6 +41,19 @@ export async function createWorkoutAction(formData: FormData) {
     .single();
 
   if (error || !data) throw new Error('Training konnte nicht erstellt werden.');
+
+  if (planDayId) {
+    const { data: planned } = await supabase
+      .from('workout_plan_exercises')
+      .select('exercise_id, position')
+      .eq('plan_day_id', planDayId)
+      .order('position', { ascending: true });
+    if (planned && planned.length > 0) {
+      await supabase
+        .from('workout_exercises')
+        .insert(planned.map((p, i) => ({ workout_id: data.id, exercise_id: p.exercise_id, position: i })));
+    }
+  }
 
   redirect(`/aktivitaet/training/${data.id}`);
 }
@@ -51,26 +73,112 @@ export async function addWorkoutExerciseAction(formData: FormData) {
   revalidatePath(`/aktivitaet/training/${workoutId}`);
 }
 
-export async function addSetAction(formData: FormData) {
+export type AddSetState = { error?: string; ok?: number } | undefined;
+
+function readNumber(formData: FormData, key: string, min: number, max: number): number | null | 'invalid' {
+  const raw = String(formData.get(key) ?? '').trim().replace(',', '.');
+  if (!raw) return null;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < min || value > max) return 'invalid';
+  return value;
+}
+
+/** Logs one set / cardio entry. Which fields are accepted depends on the
+ * exercise type (looked up server-side, never trusted from the form). */
+export async function addSetAction(_prev: AddSetState, formData: FormData): Promise<AddSetState> {
   const workoutId = String(formData.get('workoutId'));
   const workoutExerciseId = String(formData.get('workoutExerciseId'));
-  const weight = formData.get('weight') ? Number(formData.get('weight')) : null;
-  const reps = formData.get('reps') ? Number(formData.get('reps')) : null;
   await requireAuthUser();
   const supabase = await createClient();
+
+  const { data: we } = await supabase
+    .from('workout_exercises')
+    .select('id, exercises(exercise_type)')
+    .eq('id', workoutExerciseId)
+    .maybeSingle();
+  if (!we) return { error: 'Übung nicht gefunden.' };
+  const rawType = (we as unknown as { exercises: { exercise_type: ExerciseType } }).exercises.exercise_type;
+  const type = normalizeExerciseType(rawType);
+
+  const fields = {
+    weight: readNumber(formData, 'weight', 0, 9999),
+    reps: readNumber(formData, 'reps', 0, 10000),
+    distance: readNumber(formData, 'distanceKm', 0, 9999),
+    rpe: readNumber(formData, 'rpe', 1, 10),
+    rest: readNumber(formData, 'restSeconds', 0, 3600),
+    calories: readNumber(formData, 'calories', 0, 20000),
+    avgHr: readNumber(formData, 'avgHeartRate', 30, 250),
+    maxHr: readNumber(formData, 'maxHeartRate', 30, 250),
+    elevation: readNumber(formData, 'elevationGainM', 0, 20000),
+    incline: readNumber(formData, 'inclinePct', 0, 100),
+    rounds: readNumber(formData, 'rounds', 1, 500),
+    work: readNumber(formData, 'workSeconds', 1, 3600),
+    intervalRest: readNumber(formData, 'intervalRestSeconds', 0, 3600),
+  };
+  if (Object.values(fields).includes('invalid')) return { error: 'Bitte prüfe deine Eingaben.' };
+  const f = fields as Record<keyof typeof fields, number | null>;
+
+  const durationRaw = String(formData.get('duration') || '').trim();
+  let duration: number | null = null;
+  if (durationRaw) {
+    duration = parseDuration(durationRaw);
+    if (duration === null || duration > 24 * 3600) return { error: 'Zeit bitte als mm:ss oder h:mm:ss eingeben.' };
+  }
+
+  const set: Record<string, unknown> = {};
+  const metrics: Record<string, number> = {};
+  if (f.calories !== null) metrics.calories = f.calories;
+  if (f.avgHr !== null) metrics.avg_heart_rate = f.avgHr;
+  if (f.maxHr !== null) metrics.max_heart_rate = f.maxHr;
+
+  if (type === 'strength') {
+    if (f.reps === null || f.weight === null) return { error: 'Gewicht und Wiederholungen sind nötig.' };
+    set.weight_kg = f.weight;
+    set.reps = f.reps;
+    if (f.rpe !== null) metrics.rpe = f.rpe;
+    if (f.rest !== null) metrics.rest_seconds = f.rest;
+  } else if (type === 'bodyweight') {
+    if (f.reps === null && duration === null) return { error: 'Wiederholungen oder Dauer angeben.' };
+    set.reps = f.reps;
+    set.duration_seconds = duration;
+    set.weight_kg = f.weight; // optional Zusatzgewicht
+    if (f.rpe !== null) metrics.rpe = f.rpe;
+  } else if (type === 'cardio_distance') {
+    if (duration === null && f.distance === null) return { error: 'Zeit oder Distanz angeben.' };
+    set.duration_seconds = duration;
+    set.distance_km = f.distance;
+    if (f.elevation !== null) metrics.elevation_gain_m = f.elevation;
+    if (f.incline !== null) metrics.incline_pct = f.incline;
+  } else if (type === 'interval') {
+    if (f.rounds === null || f.work === null) return { error: 'Runden und Belastungszeit angeben.' };
+    metrics.rounds = f.rounds;
+    metrics.work_seconds = f.work;
+    if (f.intervalRest !== null) metrics.interval_rest_seconds = f.intervalRest;
+    set.duration_seconds = duration ?? f.rounds * (f.work + (f.intervalRest ?? 0));
+  } else {
+    // cardio_time, mobility, sport, other
+    if (duration === null) return { error: 'Bitte eine Dauer angeben.' };
+    set.duration_seconds = duration;
+  }
+
+  const notes = String(formData.get('notes') || '').trim().slice(0, 500) || null;
 
   const { count } = await supabase
     .from('workout_sets')
     .select('id', { count: 'exact', head: true })
     .eq('workout_exercise_id', workoutExerciseId);
 
-  await supabase.from('workout_sets').insert({
+  const { error } = await supabase.from('workout_sets').insert({
     workout_exercise_id: workoutExerciseId,
     set_number: (count ?? 0) + 1,
-    weight_kg: weight,
-    reps,
+    metrics,
+    notes,
+    ...set,
   });
+  if (error) return { error: 'Eintrag konnte nicht gespeichert werden.' };
+
   revalidatePath(`/aktivitaet/training/${workoutId}`);
+  return { ok: Date.now() };
 }
 
 export async function deleteSetAction(setId: string, workoutId: string) {
@@ -94,6 +202,16 @@ export async function finishWorkoutAction(formData: FormData) {
   const finishedAt = new Date();
   const durationSeconds = Math.max(1, Math.round((finishedAt.getTime() - startedAt.getTime()) / 1000));
 
+  let distanceKm: number | null = distanceRaw ? Number(distanceRaw) : null;
+  if (distanceKm === null) {
+    const { data: sets } = await supabase
+      .from('workout_sets')
+      .select('distance_km, workout_exercises!inner(workout_id)')
+      .eq('workout_exercises.workout_id', workoutId);
+    const total = (sets ?? []).reduce((sum, r) => sum + Number((r as { distance_km: number | null }).distance_km ?? 0), 0);
+    distanceKm = total > 0 ? Math.round(total * 100) / 100 : null;
+  }
+
   await supabase
     .from('workouts')
     .update({
@@ -101,7 +219,7 @@ export async function finishWorkoutAction(formData: FormData) {
       finished_at: finishedAt.toISOString(),
       duration_seconds: durationSeconds,
       notes,
-      distance_km: distanceRaw ? Number(distanceRaw) : null,
+      distance_km: distanceKm,
     })
     .eq('id', workoutId)
     .eq('user_id', user.id);

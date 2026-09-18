@@ -6,6 +6,7 @@ import { getTeamRankingWithProfiles, type RankingPeriod } from '@/lib/data/team'
 import { getTeamChallenges } from '@/lib/data/challenges';
 import { getTeamActivityFeed, renderFeedItem } from '@/lib/data/feed';
 import { getUnreadChatCount } from '@/lib/data/chat';
+import { UnreadBadge } from '@/components/chat/UnreadBadge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Avatar } from '@/components/ui/Avatar';
 import { formatGermanDate } from '@/lib/date';
@@ -59,7 +60,7 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
           </span>
           <div className="flex-1">
             <p className="text-sm font-bold text-neutral-900">{t('invite.title')}</p>
-            <p className="text-xs text-neutral-400">{t('invite.qrCode')} · {t('invite.copyLink')}</p>
+            <p className="text-xs text-neutral-400">{t('invite.qrCode')} · {t('invite.copyLink')} · E-Mail</p>
           </div>
           <ChevronRight size={18} className="shrink-0 text-neutral-300" />
         </Link>
@@ -69,11 +70,7 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
         <Link href="/team/chat" className="btn-secondary relative">
           <MessageCircle size={17} strokeWidth={2} />
           {t('chat.title')}
-          {unreadChatCount > 0 && (
-            <span className="ml-0.5 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-brand px-1 text-[10px] font-bold leading-none text-[#00232A]">
-              {unreadChatCount > 9 ? '9+' : unreadChatCount}
-            </span>
-          )}
+          <UnreadBadge initial={unreadChatCount} />
         </Link>
         <Link href="/team/herausforderungen" className="btn-secondary">
           <Trophy size={17} strokeWidth={2} />
