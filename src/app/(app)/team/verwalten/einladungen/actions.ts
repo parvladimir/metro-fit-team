@@ -35,12 +35,7 @@ export async function createInviteAction(_prev: CreateInviteState, formData: For
 
   if (error) return { error: 'Einladung konnte nicht erstellt werden.' };
 
-  await supabase.from('audit_events').insert({
-    team_id: admin.team_id,
-    actor_user_id: admin.user_id,
-    action: 'invite_created',
-    entity_type: 'team_invite',
-  });
+  await supabase.rpc('log_team_admin_audit', { p_team_id: admin.team_id, p_action: 'invite_created', p_entity_type: 'team_invite' });
 
   revalidatePath('/team/verwalten/einladungen');
   return { token, link: `${appConfig.url}/beitreten/${token}` };
@@ -53,13 +48,7 @@ export async function revokeInviteAction(inviteId: string) {
 
   await supabase.from('team_invites').update({ revoked_at: new Date().toISOString() }).eq('id', inviteId).eq('team_id', admin.team_id);
 
-  await supabase.from('audit_events').insert({
-    team_id: admin.team_id,
-    actor_user_id: admin.user_id,
-    action: 'invite_revoked',
-    entity_type: 'team_invite',
-    entity_id: inviteId,
-  });
+  await supabase.rpc('log_team_admin_audit', { p_team_id: admin.team_id, p_action: 'invite_revoked', p_entity_type: 'team_invite', p_entity_id: inviteId });
 
   revalidatePath('/team/verwalten/einladungen');
 }
@@ -126,16 +115,14 @@ export async function sendInviteEmailAction(_prev: SendInviteEmailState, formDat
   const mail = buildInviteEmail(admin.team_name, inviteUrl);
   const sent = await sendMail({ to: email, ...mail });
 
-  await supabase.from('audit_events').insert([
-    { team_id: admin.team_id, actor_user_id: admin.user_id, action: 'invite_created', entity_type: 'team_invite', entity_id: invite.id },
-    {
-      team_id: admin.team_id,
-      actor_user_id: admin.user_id,
-      action: sent ? 'invite_email_sent' : 'invite_email_failed',
-      entity_type: 'team_invite',
-      entity_id: invite.id,
-    },
-  ]);
+  await supabase.rpc('log_team_admin_audit', { p_team_id: admin.team_id, p_action: 'invite_created', p_entity_type: 'team_invite', p_entity_id: invite.id });
+  await supabase.rpc('log_team_admin_audit', {
+    p_team_id: admin.team_id,
+    p_action: sent ? 'invite_email_sent' : 'invite_email_failed',
+    p_entity_type: 'team_invite',
+    p_entity_id: invite.id,
+  });
+
 
   if (!sent) {
     await supabase.from('team_invite_emails').update({ status: 'failed' }).eq('id', logRow.id);
