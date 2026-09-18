@@ -11,6 +11,8 @@ import { ImageError, prepareChatImage, type PreparedImage } from '@/lib/image-co
 import { refreshUnread } from '@/lib/unread-store';
 import { Avatar } from '@/components/ui/Avatar';
 import { resolveAuthorName, FORMER_MEMBER_LABEL } from '@/lib/chat-identity';
+import { CreatorMessageCard } from '@/components/chat/CreatorMessageCard';
+import { fetchCreators, isCreatorCardMessage } from '@/lib/creator';
 import { t } from '@/lib/i18n';
 import type { ChatMessage } from '@/lib/data/chat';
 
@@ -83,9 +85,15 @@ export function ChatRoom({
                 .catch(() => undefined);
             }
             const { data: profile } = await supabase.from('profiles').select('full_name, avatar_url').eq('id', row.user_id).maybeSingle();
+            const creators = await fetchCreators(supabase, [row.user_id]);
             setMessages((prev) => [
               ...prev,
-              { ...row, authorName: resolveAuthorName(profile), authorAvatar: profile?.avatar_url ?? null },
+              {
+                ...row,
+                authorName: resolveAuthorName(profile),
+                authorAvatar: profile?.avatar_url ?? null,
+                creatorName: creators.get(row.user_id)?.displayName ?? null,
+              },
             ]);
           }
         )
@@ -215,6 +223,37 @@ export function ChatRoom({
               return (
                 <div key={m.id}>
                   <SystemEventCard message={m} isFirstUnread={m.id === firstUnreadId} label={t('chat.newMessages')} />
+                </div>
+              );
+            }
+
+            if (isCreatorCardMessage(m, m.creatorName ? { displayName: m.creatorName } : null)) {
+              return (
+                <div key={m.id} className="flex flex-col">
+                  {m.id === firstUnreadId && (
+                    <div className="mb-3 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-brand">
+                      <span className="h-px flex-1 bg-brand/25" />
+                      {t('chat.newMessages')}
+                      <span className="h-px flex-1 bg-brand/25" />
+                    </div>
+                  )}
+                  <CreatorMessageCard
+                    name={m.creatorName!}
+                    avatar={m.authorAvatar}
+                    content={m.message_type === 'image' || m.content ? m.content : ''}
+                    time={new Date(m.created_at).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}
+                    onReply={() => setReplyTo(m)}
+                  >
+                    {m.message_type === 'image' && m.attachment_path && (
+                      <ChatImage
+                        fluid
+                        path={m.attachment_path}
+                        thumbPath={typeof m.metadata?.thumb_path === 'string' ? (m.metadata.thumb_path as string) : null}
+                        width={m.attachment_width}
+                        height={m.attachment_height}
+                      />
+                    )}
+                  </CreatorMessageCard>
                 </div>
               );
             }

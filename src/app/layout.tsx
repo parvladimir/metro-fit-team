@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from 'next';
-import { Manrope } from 'next/font/google';
+import { Manrope, Space_Grotesk } from 'next/font/google';
 import { appConfig } from '@/lib/config';
 import { ServiceWorkerRegister } from '@/components/pwa/ServiceWorkerRegister';
 import './globals.css';
@@ -7,6 +7,13 @@ import './globals.css';
 const manrope = Manrope({
   subsets: ['latin', 'latin-ext'],
   variable: '--font-sans',
+  display: 'swap',
+});
+
+// Only used for creator/update messages in the chat (see CreatorMessageCard).
+const spaceGrotesk = Space_Grotesk({
+  subsets: ['latin', 'latin-ext'],
+  variable: '--font-creator',
   display: 'swap',
 });
 
@@ -36,7 +43,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="de" className={`dark ${manrope.variable}`}>
+    <html lang="de" className={`dark ${manrope.variable} ${spaceGrotesk.variable}`}>
       <body>
         {children}
         <ServiceWorkerRegister />

@@ -1,11 +1,14 @@
 import 'server-only';
 import { createClient } from '@/lib/supabase/server';
 import { resolveAuthorName } from '@/lib/chat-identity';
+import { fetchCreators } from '@/lib/creator';
 import type { Message, Profile } from '@/types/database';
 
 export interface ChatMessage extends Message {
   authorName: string;
   authorAvatar: string | null;
+  /** Verified creator display name (from platform_creators), else null. */
+  creatorName: string | null;
 }
 
 export async function getRecentMessages(teamId: string, limit = 50): Promise<ChatMessage[]> {
@@ -18,12 +21,15 @@ export async function getRecentMessages(teamId: string, limit = 50): Promise<Cha
     .order('created_at', { ascending: true })
     .limit(limit);
 
+  const creators = await fetchCreators(supabase, (data ?? []).map((r) => (r as { user_id: string }).user_id));
+
   return (data ?? []).map((row) => {
     const r = row as unknown as Message & { profiles: Pick<Profile, 'full_name' | 'avatar_url'> | null };
     return {
       ...r,
       authorName: resolveAuthorName(r.profiles),
       authorAvatar: r.profiles?.avatar_url ?? null,
+      creatorName: creators.get(r.user_id)?.displayName ?? null,
     };
   });
 }
