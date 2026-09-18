@@ -6,6 +6,10 @@ import { createClient } from '@/lib/supabase/server';
 import { ensureInitialAdminBootstrap } from '@/lib/server/bootstrap';
 import { publicEnv } from '@/lib/env';
 import { PENDING_INVITE_COOKIE, resolveEffectiveNext } from '@/lib/pending-invite';
+import { waitUntil } from '@vercel/functions';
+import { isEmailConfigured } from '@/lib/server/mail';
+import { sendRecoveryEmail } from '@/lib/server/recovery-mail';
+import { RECOVERY_INVALID_MESSAGE, RECOVERY_REQUEST_MESSAGE, isPlausibleEmail } from '@/lib/recovery';
 
 export type AuthActionState = { error?: string; success?: string } | undefined;
 
@@ -74,14 +78,21 @@ export async function forgotPasswordAction(_prev: AuthActionState, formData: For
   const email = String(formData.get('email') || '').trim();
   if (!email) return { error: 'Bitte E-Mail-Adresse eingeben.' };
 
-  const supabase = await createClient();
-  await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: `${publicEnv.appUrl}/auth/callback?next=/passwort-zuruecksetzen`,
-  });
+  // Same response for every well-formed address — never reveal whether an
+  // account exists. The work runs after the response so timing is uniform.
+  if (isPlausibleEmail(email)) {
+    if (isEmailConfigured()) {
+      // Own recovery link (token_hash → /auth/confirm): works across devices.
+      waitUntil(sendRecoveryEmail(email));
+    } else {
+      const supabase = await createClient();
+      await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${publicEnv.appUrl}/auth/callback?next=/passwort-zuruecksetzen`,
+      });
+    }
+  }
 
-  // Always return success, even if the email doesn't exist — do not leak
-  // whether an account exists for a given address.
-  return { success: 'Wenn ein Konto mit dieser E-Mail existiert, haben wir dir einen Link geschickt.' };
+  return { success: RECOVERY_REQUEST_MESSAGE };
 }
 
 export async function resetPasswordAction(_prev: AuthActionState, formData: FormData): Promise<AuthActionState> {
@@ -92,11 +103,21 @@ export async function resetPasswordAction(_prev: AuthActionState, formData: Form
   if (password !== confirmPassword) return { error: 'Die Passwörter stimmen nicht überein.' };
 
   const supabase = await createClient();
+  // Only a valid (recovery) session may change the password.
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: RECOVERY_INVALID_MESSAGE };
+
   const { error } = await supabase.auth.updateUser({ password });
+  if (error) {
+    const same = /same|different from the old/i.test(error.message);
+    return { error: same ? 'Das neue Passwort muss sich vom bisherigen unterscheiden.' : 'Passwort konnte nicht aktualisiert werden. Bitte fordere einen neuen Link an.' };
+  }
 
-  if (error) return { error: 'Passwort konnte nicht aktualisiert werden. Bitte fordere einen neuen Link an.' };
-
-  return { success: 'Passwort aktualisiert. Du kannst dich jetzt anmelden.' };
+  // End the temporary recovery session; the user signs in with the new password.
+  await supabase.auth.signOut();
+  redirect('/anmelden?passwort=geaendert');
 }
 
 export async function signOutAction() {

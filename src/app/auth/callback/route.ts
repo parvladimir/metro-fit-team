@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { ensureInitialAdminBootstrap } from '@/lib/server/bootstrap';
 import { PENDING_INVITE_COOKIE, resolveEffectiveNext } from '@/lib/pending-invite';
+import { RECOVERY_PATH, isRecoveryNext } from '@/lib/recovery';
 
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url);
@@ -24,6 +25,11 @@ export async function GET(request: NextRequest) {
       return response;
     }
   }
+
+  // A failed password-recovery link (expired, opened on another device without
+  // the PKCE verifier, tokens in the URL fragment…) gets a proper explanation
+  // instead of a silent bounce to the login page.
+  if (isRecoveryNext(next)) return NextResponse.redirect(`${origin}${RECOVERY_PATH}?fehler=1`);
 
   return NextResponse.redirect(`${origin}/anmelden`);
 }

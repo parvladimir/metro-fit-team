@@ -461,4 +461,10 @@ describeIntegration('Row Level Security', () => {
     const forge = await userA.client.from('workout_plan_exercises').update({ target_distance_km: 99 }).eq('id', ins.data!.id).select('id');
     expect(forge.data ?? []).toEqual([]);
   });
+  it('28. password_reset_requests throttle log is not accessible to any client role', async () => {
+    const asMember = await userB.client.from('password_reset_requests').select('id');
+    expect(asMember.error).not.toBeNull();
+    const asAnon = await createClient(SUPABASE_URL, ANON_KEY).from('password_reset_requests').insert({ email_hash: 'x' });
+    expect(asAnon.error).not.toBeNull();
+  });
 });
