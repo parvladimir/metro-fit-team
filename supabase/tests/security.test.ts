@@ -317,4 +317,122 @@ describeIntegration('Row Level Security', () => {
     const rows = (data ?? []) as { user_id: string }[];
     expect(rows.some((r) => r.user_id === outsider.id)).toBe(false);
   });
+
+  // ---- custom exercises -------------------------------------------------
+  it('20. a custom exercise is private: others cannot read, edit or forge one for someone else', async () => {
+    const name = 'Seilspringen-Test-' + Date.now();
+    const { data: mine, error } = await userB.client
+      .from('exercises')
+      .insert({ name, exercise_type: 'cardio_time', muscle_group: 'other', is_custom: true, visibility: 'private', owner_user_id: userB.id, created_by: userB.id })
+      .select('id')
+      .single();
+    expect(error).toBeNull();
+
+    const { data: seenByA } = await userA.client.from('exercises').select('id').eq('id', mine!.id);
+    expect(seenByA).toEqual([]);
+
+    await userA.client.from('exercises').update({ name: 'hijacked' }).eq('id', mine!.id);
+    const { data: still } = await admin.from('exercises').select('name').eq('id', mine!.id).single();
+    expect(still!.name).toBe(name);
+
+    const { error: forged } = await userA.client
+      .from('exercises')
+      .insert({ name: 'forged', exercise_type: 'strength', muscle_group: 'other', is_custom: true, visibility: 'private', owner_user_id: userB.id, created_by: userA.id });
+    expect(forged).not.toBeNull();
+
+    await admin.from('exercises').delete().eq('id', mine!.id);
+  });
+
+  // ---- chat media + messages -------------------------------------------
+  it('21. chat-media: member uploads into own team folder; outsider and cross-user paths are rejected', async () => {
+    const png = new Blob([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])], { type: 'image/png' });
+    const ok = await userB.client.storage.from('chat-media').upload(`${teamId}/${userB.id}/t-${Date.now()}.png`, png, { contentType: 'image/png' });
+    expect(ok.error).toBeNull();
+
+    const outsiderUp = await outsider.client.storage.from('chat-media').upload(`${teamId}/${outsider.id}/t-${Date.now()}.png`, png, { contentType: 'image/png' });
+    expect(outsiderUp.error).not.toBeNull();
+
+    const spoof = await userB.client.storage.from('chat-media').upload(`${teamId}/${userA.id}/t-${Date.now()}.png`, png, { contentType: 'image/png' });
+    expect(spoof.error).not.toBeNull();
+
+    const signedByOutsider = await outsider.client.storage.from('chat-media').createSignedUrl(ok.data!.path, 60);
+    expect(signedByOutsider.error).not.toBeNull();
+    const signedByMember = await userA.client.storage.from('chat-media').createSignedUrl(ok.data!.path, 60);
+    expect(signedByMember.error).toBeNull();
+  });
+
+  it('22. clients cannot forge system messages or image messages pointing at someone else\'s folder', async () => {
+    const sys = await userB.client.from('messages').insert({ team_id: teamId, user_id: userB.id, content: 'fake', message_type: 'system' });
+    expect(sys.error).not.toBeNull();
+
+    const badImg = await userB.client
+      .from('messages')
+      .insert({ team_id: teamId, user_id: userB.id, content: '', message_type: 'image', attachment_path: `${teamId}/${userA.id}/x.webp` });
+    expect(badImg.error).not.toBeNull();
+
+    const goodImg = await userB.client
+      .from('messages')
+      .insert({ team_id: teamId, user_id: userB.id, content: '', message_type: 'image', attachment_path: `${teamId}/${userB.id}/x.webp` });
+    expect(goodImg.error).toBeNull();
+  });
+
+  it('23. workout start/complete post system events that never count as unread and respect the sharing opt-out', async () => {
+    await userA.client.from('team_message_read_state').upsert(
+      { user_id: userA.id, team_id: teamId, last_read_at: new Date().toISOString() },
+      { onConflict: 'user_id,team_id' }
+    );
+    const before = Number((await userA.client.rpc('get_unread_chat_count', { p_team_id: teamId })).data);
+
+    const { data: w } = await userB.client
+      .from('workouts')
+      .insert({ user_id: userB.id, team_id: teamId, activity_type: 'krafttraining', status: 'laeuft', title: 'Brust & Trizeps', started_at: new Date().toISOString() })
+      .select('id')
+      .single();
+    await userB.client.from('workouts').update({ status: 'abgeschlossen', finished_at: new Date().toISOString(), duration_seconds: 3240 }).eq('id', w!.id);
+
+    const { data: events } = await admin.from('messages').select('event_type').eq('team_id', teamId).eq('message_type', 'system').eq('user_id', userB.id);
+    const types = (events ?? []).map((e) => e.event_type);
+    expect(types).toContain('workout_started');
+    expect(types).toContain('workout_completed');
+
+    const after = Number((await userA.client.rpc('get_unread_chat_count', { p_team_id: teamId })).data);
+    expect(after).toBe(before);
+
+    // opt-out: no new events
+    await admin.from('privacy_settings').update({ activity_feed_opt_in: false }).eq('user_id', userB.id);
+    const countBefore = (events ?? []).length;
+    await userB.client.from('workouts').insert({ user_id: userB.id, team_id: teamId, activity_type: 'laufen', status: 'laeuft', started_at: new Date().toISOString() });
+    const { data: events2 } = await admin.from('messages').select('id').eq('team_id', teamId).eq('message_type', 'system').eq('user_id', userB.id);
+    expect((events2 ?? []).length).toBe(countBefore);
+    await admin.from('privacy_settings').update({ activity_feed_opt_in: true }).eq('user_id', userB.id);
+  });
+
+  it('24. a human message from a teammate still counts as unread', async () => {
+    const before = Number((await userA.client.rpc('get_unread_chat_count', { p_team_id: teamId })).data);
+    await userB.client.from('messages').insert({ team_id: teamId, user_id: userB.id, content: 'zählt als ungelesen' });
+    const after = Number((await userA.client.rpc('get_unread_chat_count', { p_team_id: teamId })).data);
+    expect(after).toBe(before + 1);
+  });
+
+  // ---- email invitations -------------------------------------------------
+  it('25. invite email log: admin-only, no impersonation, DB rate limit', async () => {
+    const memberInsert = await userB.client.from('team_invite_emails').insert({ team_id: teamId, invited_by: userB.id, email: 'x@example.com', status: 'sent' });
+    expect(memberInsert.error).not.toBeNull();
+
+    const first = await userA.client.from('team_invite_emails').insert({ team_id: teamId, invited_by: userA.id, email: 'a@example.com', status: 'sent' });
+    expect(first.error).toBeNull();
+
+    const seenByMember = await userB.client.from('team_invite_emails').select('email');
+    expect(seenByMember.data).toEqual([]);
+
+    const impersonate = await userA.client.from('team_invite_emails').insert({ team_id: teamId, invited_by: userB.id, email: 'b@example.com', status: 'sent' });
+    expect(impersonate.error).not.toBeNull();
+
+    let limited = false;
+    for (let i = 0; i < 6; i++) {
+      const r = await userA.client.from('team_invite_emails').insert({ team_id: teamId, invited_by: userA.id, email: `c${i}@example.com`, status: 'sent' });
+      if (r.error?.message.includes('invite_rate_limited')) limited = true;
+    }
+    expect(limited).toBe(true);
+  });
 });
