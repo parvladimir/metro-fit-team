@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase/server';
 import { requireAuthUser, getPrimaryTeamMembership } from '@/lib/data/profile';
 import { parseDuration } from '@/lib/workout-metrics';
 import { normalizeExerciseType } from '@/lib/exercise-types';
+import { hasTargets, targetsFromRow } from '@/lib/plan-targets';
 import type { ActivityType, ExerciseType } from '@/types/database';
 
 export async function createWorkoutAction(formData: FormData) {
@@ -45,13 +46,19 @@ export async function createWorkoutAction(formData: FormData) {
   if (planDayId) {
     const { data: planned } = await supabase
       .from('workout_plan_exercises')
-      .select('exercise_id, position')
+      .select('exercise_id, position, target_sets, target_reps, target_weight_kg, target_duration_seconds, target_distance_km, target_metrics, exercises(exercise_type)')
       .eq('plan_day_id', planDayId)
       .order('position', { ascending: true });
     if (planned && planned.length > 0) {
       await supabase
         .from('workout_exercises')
-        .insert(planned.map((p, i) => ({ workout_id: data.id, exercise_id: p.exercise_id, position: i })));
+        .insert(
+          planned.map((p, i) => {
+            const type = (p as unknown as { exercises: { exercise_type: ExerciseType } | null }).exercises?.exercise_type ?? 'other';
+            const targets = targetsFromRow(type, p);
+            return { workout_id: data.id, exercise_id: p.exercise_id, position: i, planned: hasTargets(targets) ? targets : null };
+          }),
+        );
     }
   }
 

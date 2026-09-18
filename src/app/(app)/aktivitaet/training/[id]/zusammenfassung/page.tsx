@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import { PartyPopper } from 'lucide-react';
 import { requireAuthUser } from '@/lib/data/profile';
 import { getWorkoutDetail, calculateVolumeKg } from '@/lib/data/workouts';
+import { formatAchieved, formatTargets, hasTargets } from '@/lib/plan-targets';
 import { t } from '@/lib/i18n';
 
 export default async function ZusammenfassungPage({ params }: { params: Promise<{ id: string }> }) {
@@ -45,6 +46,25 @@ export default async function ZusammenfassungPage({ params }: { params: Promise<
           </div>
         )}
       </div>
+
+      {workout.workoutExercises.some((we) => hasTargets(we.planned) && we.sets.length > 0) && (
+        <section className="flex w-full flex-col gap-2 text-left">
+          <p className="section-title">Geplant vs. erreicht</p>
+          {workout.workoutExercises
+            .filter((we) => hasTargets(we.planned) && we.sets.length > 0)
+            .map((we) => (
+              <div key={we.id} className="card flex flex-col gap-1.5 py-3">
+                <p className="break-words text-sm font-semibold text-neutral-900">{we.exercise.name}</p>
+                <p className="break-words text-xs text-neutral-400">
+                  Geplant: <span className="font-semibold text-neutral-500">{formatTargets(we.exercise.exercise_type, we.planned!)}</span>
+                </p>
+                <p className="break-words text-xs text-neutral-400">
+                  Erreicht: <span className="font-semibold text-brand">{formatAchieved(we.exercise.exercise_type, we.sets) || '—'}</span>
+                </p>
+              </div>
+            ))}
+        </section>
+      )}
 
       <Link href="/" className="btn-primary w-full">{t('nav.home')}</Link>
     </div>

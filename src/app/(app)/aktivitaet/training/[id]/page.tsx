@@ -9,6 +9,7 @@ import { PlusCircle } from 'lucide-react';
 import { SetLogger } from '@/components/workout/SetLogger';
 import { exerciseTypeLabel } from '@/lib/exercise-types';
 import { summarizeSet } from '@/lib/workout-metrics';
+import { formatTargets, hasTargets } from '@/lib/plan-targets';
 import { t } from '@/lib/i18n';
 
 export default async function TrainingDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -51,6 +52,11 @@ export default async function TrainingDetailPage({ params }: { params: Promise<{
             <div className="min-w-0">
               <p className="break-words text-base font-bold text-neutral-900">{we.exercise.name}</p>
               <p className="text-xs text-neutral-400">{exerciseTypeLabel(we.exercise.exercise_type)}</p>
+              {hasTargets(we.planned) && (
+                <p className="mt-1 break-words text-xs text-neutral-400">
+                  Geplant: <span className="font-semibold text-neutral-500">{formatTargets(we.exercise.exercise_type, we.planned!)}</span>
+                </p>
+              )}
             </div>
 
             {we.sets.length > 0 && (

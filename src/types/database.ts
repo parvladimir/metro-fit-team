@@ -138,6 +138,10 @@ export interface WorkoutPlanExercise {
   position: number;
   target_sets: number | null;
   target_reps: number | null;
+  target_weight_kg: number | null;
+  target_duration_seconds: number | null;
+  target_distance_km: number | null;
+  target_metrics: { rounds?: number; work_seconds?: number; rest_seconds?: number };
   created_at: string;
   updated_at: string;
 }
@@ -167,6 +171,8 @@ export interface WorkoutExercise {
   exercise_id: string;
   position: number;
   notes: string | null;
+  /** Snapshot of the plan targets at workout start (guidance only), or null. */
+  planned: import('@/lib/plan-targets').PlannedTargets | null;
   created_at: string;
   updated_at: string;
 }
