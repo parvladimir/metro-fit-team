@@ -32,7 +32,8 @@ export default async function ChatPage({ searchParams }: { searchParams: Promise
     <div className="-mb-6 flex h-full min-h-0 flex-1 flex-col">
       <div
         className="flex shrink-0 items-center gap-3 border-b border-neutral-200 bg-neutral-100 px-4 pb-3"
-        style={{ paddingTop: 'max(0.75rem, calc(env(safe-area-inset-top) + 0.5rem))' }}
+        // Safe-area inset + extra breathing room so the header never sits tight under the status bar / Dynamic Island.
+        style={{ paddingTop: 'max(1rem, calc(env(safe-area-inset-top) + 1rem))' }}
       >
         <BackLink href="/team" />
         <h1 className="min-w-0 truncate text-lg font-bold text-neutral-900">{membership.team_name}</h1>
