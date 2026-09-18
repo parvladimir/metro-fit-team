@@ -11,6 +11,7 @@ const PUBLIC_PATHS = [
   '/passwort-vergessen',
   '/passwort-zuruecksetzen',
   '/auth/callback',
+  '/auth/confirm',
 ];
 
 export async function updateSession(request: NextRequest) {

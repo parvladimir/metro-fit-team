@@ -7,7 +7,7 @@ import { SubmitButton } from '@/components/ui/SubmitButton';
 import { FormMessage } from '@/components/ui/FormMessage';
 import { t } from '@/lib/i18n';
 
-export function SignInForm({ next }: { next: string }) {
+export function SignInForm({ next, notice }: { next: string; notice?: string }) {
   const [state, formAction] = useFormState(signInAction, undefined);
 
   return (
@@ -25,7 +25,7 @@ export function SignInForm({ next }: { next: string }) {
           <input id="password" name="password" type="password" autoComplete="current-password" required className="input-field" />
         </div>
 
-        <FormMessage error={state?.error} success={state?.success} />
+        <FormMessage error={state?.error} success={state?.success ?? notice} />
 
         <SubmitButton>{t('auth.signIn.submit')}</SubmitButton>
       </form>

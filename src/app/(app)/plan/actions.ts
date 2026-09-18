@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { createClient } from '@/lib/supabase/server';
 import { requireAuthUser } from '@/lib/data/profile';
 import { getOrCreateActivePlan } from '@/lib/data/plan';
+import { parseTargets, targetsToColumns } from '@/lib/plan-targets';
 
 export async function saveDayAction(formData: FormData) {
   const user = await requireAuthUser();
@@ -38,9 +39,11 @@ export async function addExerciseToDayAction(formData: FormData) {
 
   const weekday = Number(formData.get('weekday'));
   const exerciseId = String(formData.get('exerciseId'));
-  // Only strength/bodyweight exercises send set targets (other types have none).
-  const targetSets = formData.get('targetSets') ? Math.min(50, Math.max(1, Number(formData.get('targetSets')))) : null;
-  const targetReps = formData.get('targetReps') ? Math.min(1000, Math.max(1, Number(formData.get('targetReps')))) : null;
+  // Targets are optional and parsed per the exercise's real type (read from the
+  // DB under RLS), so a crafted request cannot store irrelevant fields.
+  const { data: exercise } = await supabase.from('exercises').select('exercise_type').eq('id', exerciseId).maybeSingle();
+  if (!exercise) return;
+  const targets = parseTargets(exercise.exercise_type, formData);
   const title = String(formData.get('title') || '');
 
   const { data: day } = await supabase
@@ -60,8 +63,7 @@ export async function addExerciseToDayAction(formData: FormData) {
     plan_day_id: dayId,
     exercise_id: exerciseId,
     position: count ?? 0,
-    target_sets: targetSets,
-    target_reps: targetReps,
+    ...targetsToColumns(targets),
   });
 
   revalidatePath(`/plan/tag/${weekday}`);

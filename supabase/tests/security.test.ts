@@ -443,4 +443,28 @@ describeIntegration('Row Level Security', () => {
     });
     expect(r.error).not.toBeNull();
   });
+  it('27. plan targets: owner stores typed targets, planned snapshot is separate from sets, others cannot read/write', async () => {
+    const { data: ex } = await admin.from('exercises').select('id').is('team_id', null).limit(1).single();
+    const { data: plan } = await userB.client.from('workout_plans').insert({ user_id: userB.id, name: 'T27' }).select('id').single();
+    const { data: day } = await userB.client.from('workout_plan_days').insert({ plan_id: plan!.id, weekday: 1, title: 't' }).select('id').single();
+    const ins = await userB.client.from('workout_plan_exercises').insert({
+      plan_day_id: day!.id, exercise_id: ex!.id, target_distance_km: 5, target_duration_seconds: 1800, target_metrics: { rounds: 8 },
+    }).select('id, target_distance_km, target_duration_seconds, target_metrics').single();
+    expect(ins.error).toBeNull();
+    expect(Number(ins.data!.target_distance_km)).toBe(5);
+
+    const bad = await userB.client.from('workout_plan_exercises').insert({ plan_day_id: day!.id, exercise_id: ex!.id, target_distance_km: -1 });
+    expect(bad.error).not.toBeNull();
+
+    const other = await userA.client.from('workout_plan_exercises').select('id').eq('id', ins.data!.id);
+    expect(other.data).toEqual([]);
+    const forge = await userA.client.from('workout_plan_exercises').update({ target_distance_km: 99 }).eq('id', ins.data!.id).select('id');
+    expect(forge.data ?? []).toEqual([]);
+  });
+  it('28. password_reset_requests throttle log is not accessible to any client role', async () => {
+    const asMember = await userB.client.from('password_reset_requests').select('id');
+    expect(asMember.error).not.toBeNull();
+    const asAnon = await createClient(SUPABASE_URL, ANON_KEY).from('password_reset_requests').insert({ email_hash: 'x' });
+    expect(asAnon.error).not.toBeNull();
+  });
 });

@@ -108,6 +108,36 @@ export function buildInviteEmail(teamName: string, link: string): { subject: str
   return { subject, html, text };
 }
 
+export function buildRecoveryEmail(link: string): { subject: string; html: string; text: string } {
+  const subject = 'Passwort zurücksetzen – METRO Fit Team';
+  const text = [
+    'Hallo,',
+    '',
+    'du hast ein neues Passwort für dein METRO Fit Team Konto angefordert.',
+    '',
+    'Neues Passwort festlegen:',
+    link,
+    '',
+    'Der Link ist nur kurze Zeit gültig und kann nur einmal verwendet werden.',
+    'Falls du das nicht angefordert hast, kannst du diese E-Mail ignorieren – dein Passwort bleibt unverändert.',
+    '',
+    'Viele Grüße',
+    'METRO Fit Team',
+  ].join('\n');
+  const html = `<!doctype html><html lang="de"><body style="margin:0;background:#04141a;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#e6f1f1">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="padding:32px 16px"><tr><td align="center">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;background:#0e2226;border-radius:20px;padding:32px">
+<tr><td>
+<p style="margin:0 0 16px;font-size:16px">Hallo,</p>
+<p style="margin:0 0 24px;font-size:16px;line-height:1.5">du hast ein neues Passwort für dein METRO Fit Team Konto angefordert.</p>
+<p style="margin:0 0 24px"><a href="${escapeHtml(link)}" style="display:inline-block;background:#00d7f5;color:#00232a;font-weight:700;text-decoration:none;padding:14px 28px;border-radius:999px;font-size:16px">Neues Passwort festlegen</a></p>
+<p style="margin:0 0 8px;font-size:14px;color:#8aa9ac;line-height:1.5">Der Link ist nur kurze Zeit gültig und kann nur einmal verwendet werden.</p>
+<p style="margin:0 0 24px;font-size:14px;color:#8aa9ac;line-height:1.5">Falls du das nicht angefordert hast, kannst du diese E-Mail ignorieren &ndash; dein Passwort bleibt unverändert.</p>
+<p style="margin:0;font-size:16px">Viele Grüße<br>METRO Fit Team</p>
+</td></tr></table></td></tr></table></body></html>`;
+  return { subject, html, text };
+}
+
 /** Sends one mail over SMTP. Provider errors are logged (never the
  * credentials) and reduced to a boolean for the caller. */
 export async function sendMail(

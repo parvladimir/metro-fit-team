@@ -4,7 +4,8 @@ import { requireAuthUser, getCurrentProfile, getPrimaryTeamMembership } from '@/
 import { getOrCreateActivePlan, getPlanDay, getExerciseCatalogue } from '@/lib/data/plan';
 import { saveDayAction, removeExerciseFromDayAction, deleteDayAction } from '../../actions';
 import { AddPlanExerciseForm } from '@/components/plan/AddPlanExerciseForm';
-import { muscleGroupLabel, usesSetTargets } from '@/lib/exercise-types';
+import { exerciseTypeLabel, muscleGroupLabel } from '@/lib/exercise-types';
+import { formatTargets, targetsFromRow } from '@/lib/plan-targets';
 import { t, type TranslationKey } from '@/lib/i18n';
 
 export default async function PlanDayPage({
@@ -67,20 +68,23 @@ export default async function PlanDayPage({
           <section className="flex flex-col gap-2">
             <p className="section-title">{t('plan.selectExercises')}</p>
             {day && day.exercises.length > 0 ? (
-              day.exercises.map((pe) => (
-                <div key={pe.id} className="card flex items-center justify-between gap-3 py-3">
-                  <div className="min-w-0 flex-1">
-                    <p className="break-words text-sm font-semibold text-neutral-900">{pe.exercise.name}</p>
-                    <p className="text-xs text-neutral-500">
-                      {muscleGroupLabel(pe.exercise.muscle_group)}
-                      {usesSetTargets(pe.exercise.exercise_type) && pe.target_sets ? ` · ${pe.target_sets}×${pe.target_reps}` : ''}
-                    </p>
+              day.exercises.map((pe) => {
+                const summary = formatTargets(pe.exercise.exercise_type, targetsFromRow(pe.exercise.exercise_type, pe));
+                return (
+                  <div key={pe.id} className="card flex items-start justify-between gap-3 py-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="break-words text-sm font-semibold text-neutral-900">{pe.exercise.name}</p>
+                      <p className="break-words text-xs text-neutral-500">
+                        {exerciseTypeLabel(pe.exercise.exercise_type)} · {muscleGroupLabel(pe.exercise.muscle_group)}
+                      </p>
+                      {summary && <p className="mt-1.5 break-words text-sm font-semibold text-brand">{summary}</p>}
+                    </div>
+                    <form action={removeExercise.bind(null, pe.id, weekday)} className="shrink-0">
+                      <button type="submit" className="btn-destructive px-3 py-2 text-xs">{t('common.delete')}</button>
+                    </form>
                   </div>
-                  <form action={removeExercise.bind(null, pe.id, weekday)} className="shrink-0">
-                    <button type="submit" className="btn-destructive px-3 py-2 text-xs">{t('common.delete')}</button>
-                  </form>
-                </div>
-              ))
+                );
+              })
             ) : (
               <p className="text-sm text-neutral-400">{t('plan.noExercises')}</p>
             )}
