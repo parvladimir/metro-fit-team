@@ -5,9 +5,10 @@ import { revalidatePath } from 'next/cache';
 import { createClient } from '@/lib/supabase/server';
 import { requireAuthUser, getPrimaryTeamMembership } from '@/lib/data/profile';
 import { parseDuration } from '@/lib/workout-metrics';
+import { buildSetEdit, localDateString, shiftByDays, type SetValues } from '@/lib/set-input';
 import { normalizeExerciseType } from '@/lib/exercise-types';
 import { hasTargets, targetsFromRow } from '@/lib/plan-targets';
-import type { ActivityType, ExerciseType } from '@/types/database';
+import type { ActivityType, ExerciseType, SetMetrics } from '@/types/database';
 
 export async function createWorkoutAction(formData: FormData) {
   const user = await requireAuthUser();
@@ -289,5 +290,107 @@ export async function logActivityAction(formData: FormData) {
     notes: String(formData.get('notes') || '').trim() || null,
   });
 
+  redirect('/aktivitaet');
+}
+
+export type EditWorkoutState = { error?: string } | undefined;
+
+/** Edits the caller's own completed workout IN PLACE (same id): workout fields,
+ * exercises and sets. Ownership is enforced by RLS on the child rows and by
+ * update_own_workout(), which also rebuilds everything derived from the
+ * workout (team event text, score ledger/totals, challenge progress). */
+export async function updateWorkoutAction(_prev: EditWorkoutState, formData: FormData): Promise<EditWorkoutState> {
+  const workoutId = String(formData.get('workoutId') || '');
+  const user = await requireAuthUser();
+  const supabase = await createClient();
+
+  const { data: workout } = await supabase
+    .from('workouts')
+    .select('id, user_id, status, finished_at')
+    .eq('id', workoutId)
+    .eq('user_id', user.id)
+    .maybeSingle();
+  if (!workout || workout.status !== 'abgeschlossen' || !workout.finished_at) return { error: 'Training nicht gefunden.' };
+
+  const durationSeconds = parseDuration(String(formData.get('duration') || ''));
+  if (!durationSeconds || durationSeconds < 1 || durationSeconds > 24 * 3600) return { error: 'Dauer bitte als mm:ss oder h:mm:ss eingeben.' };
+
+  const date = String(formData.get('date') || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return { error: 'Bitte ein gültiges Datum wählen.' };
+  const original = new Date(workout.finished_at);
+  const finishedAt = shiftByDays(original, localDateString(original), date);
+  if (finishedAt.getTime() > Date.now() + 3600_000) return { error: 'Das Datum darf nicht in der Zukunft liegen.' };
+
+  const { data: exercises } = await supabase
+    .from('workout_exercises')
+    .select('id, exercises(exercise_type), workout_sets(id, metrics, distance_km)')
+    .eq('workout_id', workoutId);
+
+  type Row = { id: string; exercises: { exercise_type: ExerciseType }; workout_sets: { id: string; metrics: SetMetrics; distance_km: number | null }[] };
+  let distanceFromSets = 0;
+  const sets: { id: string; values: SetValues; metrics: SetMetrics }[] = [];
+  const removeSets: string[] = [];
+  const removeExercises: string[] = [];
+
+  for (const ex of (exercises ?? []) as unknown as Row[]) {
+    if (formData.get(`ex-${ex.id}-remove`) === 'on') {
+      removeExercises.push(ex.id);
+      continue;
+    }
+    for (const s of ex.workout_sets) {
+      if (formData.get(`set-${s.id}-remove`) === 'on') {
+        removeSets.push(s.id);
+        continue;
+      }
+      const res = buildSetEdit(ex.exercises.exercise_type, (f) => String(formData.get(`set-${s.id}-${f}`) ?? ''), s.metrics ?? {});
+      if (!res.ok) return { error: res.error };
+      sets.push({ id: s.id, values: res.values, metrics: res.metrics });
+      distanceFromSets += res.values.distance_km ?? 0;
+    }
+  }
+
+  const explicitDistanceRaw = String(formData.get('distanceKm') || '').trim().replace(',', '.');
+  let distanceKm: number | null = null;
+  if (distanceFromSets > 0) distanceKm = Math.round(distanceFromSets * 100) / 100;
+  else if (explicitDistanceRaw) {
+    const d = Number(explicitDistanceRaw);
+    if (!Number.isFinite(d) || d < 0 || d > 9999) return { error: 'Bitte prüfe die Distanz.' };
+    distanceKm = d;
+  }
+
+  if (removeExercises.length) await supabase.from('workout_exercises').delete().in('id', removeExercises);
+  if (removeSets.length) await supabase.from('workout_sets').delete().in('id', removeSets);
+  for (const s of sets) {
+    const { error } = await supabase.from('workout_sets').update({ ...s.values, metrics: s.metrics }).eq('id', s.id);
+    if (error) return { error: 'Änderungen konnten nicht gespeichert werden.' };
+  }
+
+  const { error } = await supabase.rpc('update_own_workout', {
+    p_workout_id: workoutId,
+    p_title: String(formData.get('title') || '').slice(0, 120),
+    p_finished_at: finishedAt.toISOString(),
+    p_duration_seconds: durationSeconds,
+    p_distance_km: distanceKm,
+    p_notes: String(formData.get('notes') || '').slice(0, 500),
+  });
+  if (error) return { error: 'Training konnte nicht gespeichert werden.' };
+
+  revalidatePath('/aktivitaet');
+  revalidatePath('/team');
+  redirect(`/aktivitaet/training/${workoutId}/zusammenfassung`);
+}
+
+/** Deletes the caller's own workout together with everything derived from it
+ * (see delete_own_workout): team events with their reactions/replies, feed
+ * entries, score effects, challenge progress. */
+export async function deleteWorkoutAction(workoutId: string) {
+  if (!/^[0-9a-f-]{36}$/i.test(workoutId)) return;
+  await requireAuthUser();
+  const supabase = await createClient();
+  const { error } = await supabase.rpc('delete_own_workout', { p_workout_id: workoutId });
+  if (error) throw new Error('Training konnte nicht gelöscht werden.');
+  revalidatePath('/aktivitaet');
+  revalidatePath('/team');
+  revalidatePath('/team/chat');
   redirect('/aktivitaet');
 }

@@ -8,13 +8,14 @@ import { notifyEventOwner, notifyTeamOfNewChatMessage } from '@/lib/server/push'
 import { createAdminClient } from '@/lib/supabase/admin';
 import { cleanReply, isValidMessageId, type EventReply } from '@/lib/event-social';
 import { resolveAuthorName } from '@/lib/chat-identity';
+import { stripMarkdown } from '@/lib/chat-format';
 
 export async function sendMessageAction(formData: FormData) {
   const user = await requireAuthUser();
   const supabase = await createClient();
 
   const teamId = String(formData.get('teamId'));
-  const content = String(formData.get('content') || '').trim();
+  const content = String(formData.get('content') || '').replace(/\r\n?/g, '\n').trim();
   const replyToId = String(formData.get('replyToId') || '') || null;
 
   if (!content) return;
@@ -27,7 +28,7 @@ export async function sendMessageAction(formData: FormData) {
   // (Vercel's waitUntil) so it never adds latency to sending a message —
   // and notifyTeamOfNewChatMessage itself swallows every failure, so a bad
   // subscription or provider outage can never surface here either way.
-  waitUntil(notifyTeamOfNewChatMessage({ teamId, senderId: user.id, content: trimmedContent }));
+  waitUntil(notifyTeamOfNewChatMessage({ teamId, senderId: user.id, content: stripMarkdown(trimmedContent) }));
 }
 
 export type SendImageResult = { ok: true } | { ok: false; error: string };
@@ -70,7 +71,7 @@ export async function sendImageMessageAction(input: {
     return { ok: false, error: 'Bild konnte nicht gesendet werden.' };
   }
 
-  const caption = input.caption.trim().slice(0, 2000);
+  const caption = input.caption.replace(/\r\n?/g, '\n').trim().slice(0, 2000);
   const { error } = await supabase.from('messages').insert({
     id: input.messageId,
     team_id: input.teamId,
@@ -229,4 +230,55 @@ export async function markNotificationsReadAction(messageId?: string) {
     .is('read_at', null);
   if (messageId && isValidMessageId(messageId)) q = q.eq('message_id', messageId);
   await q;
+}
+
+export type EditMessageResult = { ok: true; content: string; edited_at: string } | { ok: false; error: string };
+
+/** Edits the caller's own human message IN PLACE (same row, same id). RLS +
+ * the guard_message_update trigger enforce ownership and forbid touching
+ * anything but the content. Deliberately sends no push and creates no
+ * notification — editing must be silent and never affects unread counts. */
+export async function editMessageAction(messageId: string, rawContent: string): Promise<EditMessageResult> {
+  if (!isValidMessageId(messageId)) return { ok: false, error: 'Nachricht nicht gefunden.' };
+  const content = rawContent.replace(/\r\n?/g, '\n').trim().slice(0, 2000);
+  const user = await requireAuthUser();
+  const supabase = await createClient();
+
+  const { data: current } = await supabase
+    .from('messages')
+    .select('message_type, content')
+    .eq('id', messageId)
+    .eq('user_id', user.id)
+    .maybeSingle();
+  if (!current || current.message_type === 'system') return { ok: false, error: 'Diese Nachricht kann nicht bearbeitet werden.' };
+  if (!content && current.message_type !== 'image') return { ok: false, error: 'Die Nachricht darf nicht leer sein.' };
+  if (content === current.content) return { ok: true, content, edited_at: new Date().toISOString() };
+
+  const { data, error } = await supabase
+    .from('messages')
+    .update({ content })
+    .eq('id', messageId)
+    .eq('user_id', user.id)
+    .select('content, edited_at')
+    .maybeSingle();
+  if (error || !data) return { ok: false, error: 'Nachricht konnte nicht gespeichert werden.' };
+  revalidatePath('/team/chat');
+  return { ok: true, content: data.content, edited_at: data.edited_at ?? new Date().toISOString() };
+}
+
+/** Soft-deletes the caller's own human message (deleted_at). */
+export async function deleteMessageAction(messageId: string): Promise<{ ok: boolean }> {
+  if (!isValidMessageId(messageId)) return { ok: false };
+  const user = await requireAuthUser();
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from('messages')
+    .update({ deleted_at: new Date().toISOString() })
+    .eq('id', messageId)
+    .eq('user_id', user.id)
+    .neq('message_type', 'system')
+    .select('id')
+    .maybeSingle();
+  if (!error && data) revalidatePath('/team/chat');
+  return { ok: !error && !!data };
 }

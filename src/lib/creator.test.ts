@@ -64,11 +64,11 @@ describe('CreatorMessageCard markup', () => {
     expect(html).toContain('Creator');
     expect(html).toContain('21:35');
   });
-  it('preserves paragraphs, wraps safely, escapes HTML, opens links safely', () => {
-    expect(html).toContain('whitespace-pre-wrap');
+  it('renders Markdown paragraphs, wraps safely, drops raw HTML, opens links safely', () => {
+    expect(html).toContain('<p');
     expect(html).toContain('break-words');
-    expect(html).toContain('&lt;b&gt;x&lt;/b&gt;');
-    expect(html).toContain('rel="noopener noreferrer"');
+    expect(html).not.toContain('<b>x</b>');
+    expect(html).toContain('rel="noopener noreferrer nofollow"');
     expect(html).toContain('font-creator');
   });
   it('renders an attachment inside the card', () => {
