@@ -169,7 +169,7 @@ export function ChatRoom({
           if (row.deleted_at) {
             setMessages((prev) => prev.filter((m) => m.id !== row.id));
           } else {
-            setMessages((prev) => prev.map((m) => (m.id === row.id ? { ...m, content: row.content, edited_at: row.edited_at } : m)));
+            setMessages((prev) => prev.map((m) => (m.id === row.id ? { ...m, content: row.content, edited_at: row.edited_at, metadata: row.metadata } : m)));
           }
         })
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'message_reactions', filter: `team_id=eq.${teamId}` }, (payload) => {

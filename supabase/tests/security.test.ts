@@ -681,4 +681,161 @@ describeIntegration('Row Level Security', () => {
       expect(data!.deleted_at).not.toBeNull();
     });
   });
+  describe('workout edit / delete', () => {
+    let W: typeof userB;
+    beforeAll(async () => {
+      W = await createTestUser('workout-owner');
+      await admin.from('team_members').insert({ team_id: teamId, user_id: W.id, role: 'member' });
+      await admin.from('profiles').update({ weekly_goal: 99 }).eq('id', W.id);
+    });
+    afterAll(async () => {
+      await admin.auth.admin.deleteUser(W.id).catch(() => undefined);
+    });
+    async function completeWorkout(user: typeof W, title: string, seconds: number) {
+      const { data: w } = await user.client
+        .from('workouts')
+        .insert({ user_id: user.id, team_id: teamId, activity_type: 'krafttraining', status: 'laeuft', title, started_at: new Date(Date.now() - seconds * 1000).toISOString() })
+        .select('id')
+        .single();
+      const r = await user.client
+        .from('workouts')
+        .update({ status: 'abgeschlossen', finished_at: new Date().toISOString(), duration_seconds: seconds })
+        .eq('id', w!.id);
+      expect(r.error).toBeNull();
+      return w!.id as string;
+    }
+    const points = async (user: typeof W) => {
+      const { data } = await admin.from('fitness_score_events').select('points, event_type').eq('user_id', user.id).eq('team_id', teamId);
+      const { data: tot } = await admin.from('fitness_score_totals').select('points').eq('user_id', user.id).eq('team_id', teamId);
+      return {
+        ledger: (data ?? []).reduce((a, r) => a + r.points, 0),
+        totals: (tot ?? []).reduce((a, r) => a + r.points, 0),
+        types: (data ?? []).map((r) => r.event_type),
+      };
+    };
+
+    it('44. 60-min workout scores; editing to 1 minute removes the duration bonus, back to 45 min restores it (same workout id)', async () => {
+      await admin.from('profiles').update({ weekly_goal: 99 }).eq('id', W.id);
+      const id = await completeWorkout(W, 'Test Beine', 3600);
+      let p = await points(W);
+      expect(p.types).toContain('workout_completed');
+      expect(p.types).toContain('workout_duration_bonus');
+      expect(p.totals).toBe(p.ledger);
+
+      const e1 = await W.client.rpc('update_own_workout', { p_workout_id: id, p_title: 'Test Beine', p_finished_at: new Date().toISOString(), p_duration_seconds: 60, p_distance_km: null, p_notes: null });
+      expect(e1.error).toBeNull();
+      p = await points(W);
+      expect(p.types).not.toContain('workout_duration_bonus');
+      expect(p.totals).toBe(p.ledger);
+
+      await W.client.rpc('update_own_workout', { p_workout_id: id, p_title: 'Test Beine', p_finished_at: new Date().toISOString(), p_duration_seconds: 2700, p_distance_km: null, p_notes: null });
+      p = await points(W);
+      expect(p.types).toContain('workout_duration_bonus');
+      expect(p.totals).toBe(p.ledger);
+
+      const { data: rows } = await admin.from('workouts').select('id').eq('user_id', W.id).eq('title', 'Test Beine');
+      expect(rows).toHaveLength(1);
+      expect(rows![0]!.id).toBe(id);
+
+      await W.client.rpc('delete_own_workout', { p_workout_id: id });
+    });
+
+    it('45. deleting removes the workout, its team events + feed entry, reactions/replies, notifications and the score effects', async () => {
+      const before = await points(W);
+      const id = await completeWorkout(W, 'Test Löschen', 3600);
+      const { data: ev } = await admin.from('messages').select('id, event_type').eq('workout_id', id).eq('message_type', 'system');
+      expect((ev ?? []).map((e) => e.event_type).sort()).toEqual(['workout_completed', 'workout_started']);
+      const started = ev!.find((e) => e.event_type === 'workout_started')!.id;
+      const { data: feed } = await admin.from('activity_feed').select('id').eq('workout_id', id);
+      expect(feed).toHaveLength(1);
+
+      await userA.client.from('message_reactions').insert({ message_id: started, user_id: userA.id });
+      await userA.client.from('messages').insert({ team_id: teamId, user_id: userA.id, content: 'Stark', parent_message_id: started });
+      const during = await points(W);
+      expect(during.ledger).toBeGreaterThan(before.ledger);
+
+      const del = await W.client.rpc('delete_own_workout', { p_workout_id: id });
+      expect(del.error).toBeNull();
+
+      expect((await admin.from('workouts').select('id').eq('id', id)).data).toEqual([]);
+      expect((await admin.from('messages').select('id').eq('workout_id', id)).data).toEqual([]);
+      expect((await admin.from('activity_feed').select('id').eq('workout_id', id)).data).toEqual([]);
+      expect((await admin.from('message_reactions').select('id').eq('message_id', started)).data).toEqual([]);
+      expect((await admin.from('messages').select('id').eq('parent_message_id', started)).data).toEqual([]);
+      expect((await admin.from('notifications').select('id').eq('message_id', started)).data).toEqual([]);
+      const after = await points(W);
+      expect(after.ledger).toBe(before.ledger);
+      expect(after.totals).toBe(after.ledger);
+      const { data: audit } = await admin.from('audit_events').select('action, metadata').eq('entity_id', id);
+      expect((audit ?? []).map((a) => a.action)).toContain('workout_deleted');
+      expect(JSON.stringify(audit)).not.toMatch(/duration|weight|Test Löschen/);
+    });
+
+    it('46. weekly-goal bonus is recalculated on delete', async () => {
+      await admin.from('profiles').update({ weekly_goal: 1 }).eq('id', W.id);
+      const id = await completeWorkout(W, 'Test Wochenziel', 600);
+      expect((await points(W)).types).toContain('weekly_goal_reached');
+      await W.client.rpc('delete_own_workout', { p_workout_id: id });
+      const p = await points(W);
+      expect(p.types).not.toContain('weekly_goal_reached');
+      expect(p.totals).toBe(p.ledger);
+      await admin.from('profiles').update({ weekly_goal: 99 }).eq('id', W.id);
+    });
+
+    it('47. editing updates the visible team event in place: no new message, no unread change, same id', async () => {
+      const id = await completeWorkout(W, 'Brust', 60);
+      await userA.client.from('team_message_read_state').upsert({ user_id: userA.id, team_id: teamId, last_read_at: new Date().toISOString() }, { onConflict: 'user_id,team_id' });
+      const { count: msgsBefore } = await admin.from('messages').select('id', { count: 'exact', head: true }).eq('team_id', teamId);
+      const unreadBefore = Number((await userA.client.rpc('get_unread_chat_count', { p_team_id: teamId })).data);
+      const { count: notifBefore } = await admin.from('notifications').select('id', { count: 'exact', head: true });
+
+      const r = await W.client.rpc('update_own_workout', { p_workout_id: id, p_title: 'Brust & Trizeps', p_finished_at: new Date().toISOString(), p_duration_seconds: 2700, p_distance_km: null, p_notes: 'ok' });
+      expect(r.error).toBeNull();
+
+      const { data: ev } = await admin.from('messages').select('metadata, event_type').eq('workout_id', id).eq('event_type', 'workout_completed').single();
+      expect(ev!.metadata).toMatchObject({ title: 'Brust & Trizeps', duration_minutes: 45 });
+      const { count: msgsAfter } = await admin.from('messages').select('id', { count: 'exact', head: true }).eq('team_id', teamId);
+      expect(msgsAfter).toBe(msgsBefore);
+      expect(Number((await userA.client.rpc('get_unread_chat_count', { p_team_id: teamId })).data)).toBe(unreadBefore);
+      const { count: notifAfter } = await admin.from('notifications').select('id', { count: 'exact', head: true });
+      expect(notifAfter).toBe(notifBefore);
+      await W.client.rpc('delete_own_workout', { p_workout_id: id });
+    });
+
+    it('48. nobody else can edit or delete it: not a member, not the team admin, not an outsider', async () => {
+      const id = await completeWorkout(W, 'Privat', 1200);
+      const args = { p_workout_id: id, p_title: 'x', p_finished_at: new Date().toISOString(), p_duration_seconds: 60, p_distance_km: null, p_notes: null };
+      for (const other of [userA, outsider]) {
+        expect((await other.client.rpc('update_own_workout', args)).error).not.toBeNull();
+        expect((await other.client.rpc('delete_own_workout', { p_workout_id: id })).error).not.toBeNull();
+      }
+      const { data } = await admin.from('workouts').select('title, duration_seconds').eq('id', id).single();
+      expect(data).toMatchObject({ title: 'Privat', duration_seconds: 1200 });
+      // anonymous cannot call either
+      const anon = createClient(SUPABASE_URL, ANON_KEY);
+      expect((await anon.rpc('delete_own_workout', { p_workout_id: id })).error).not.toBeNull();
+      await W.client.rpc('delete_own_workout', { p_workout_id: id });
+    });
+
+    it('49. challenge progress is recalculated after a delete', async () => {
+      const today = new Date().toISOString().slice(0, 10);
+      const { data: ch } = await admin.from('challenges').insert({ team_id: teamId, title: 'T', challenge_type: 'individual', metric: 'workouts_count', target_value: 50, starts_at: today, ends_at: today, created_by: userA.id }).select('id').single();
+      await admin.from('challenge_participants').insert({ challenge_id: ch!.id, user_id: W.id });
+      const id = await completeWorkout(W, 'Challenge', 900);
+      const prog = async () => Number((await admin.from('challenge_participants').select('progress_value').eq('challenge_id', ch!.id).eq('user_id', W.id).single()).data!.progress_value);
+      expect(await prog()).toBeGreaterThanOrEqual(1);
+      const withOne = await prog();
+      await W.client.rpc('delete_own_workout', { p_workout_id: id });
+      expect(await prog()).toBe(withOne - 1);
+      await admin.from('challenges').delete().eq('id', ch!.id);
+    });
+
+    it('50. edited workout events cannot be forged by clients (guard still blocks direct system-event edits)', async () => {
+      const id = await completeWorkout(W, 'Guard', 900);
+      const { data: ev } = await admin.from('messages').select('id').eq('workout_id', id).eq('event_type', 'workout_completed').single();
+      const r = await W.client.from('messages').update({ metadata: { title: 'gefälscht' } }).eq('id', ev!.id).select('id');
+      expect(r.error !== null || (r.data ?? []).length === 0).toBe(true);
+      await W.client.rpc('delete_own_workout', { p_workout_id: id });
+    });
+  });
 });

@@ -4,6 +4,7 @@ import { PartyPopper } from 'lucide-react';
 import { requireAuthUser } from '@/lib/data/profile';
 import { getWorkoutDetail, calculateVolumeKg } from '@/lib/data/workouts';
 import { formatAchieved, formatTargets, hasTargets } from '@/lib/plan-targets';
+import { WorkoutActionsMenu } from '@/components/workout/WorkoutActionsMenu';
 import { t } from '@/lib/i18n';
 
 export default async function ZusammenfassungPage({ params }: { params: Promise<{ id: string }> }) {
@@ -17,6 +18,9 @@ export default async function ZusammenfassungPage({ params }: { params: Promise<
 
   return (
     <div className="screen-padding flex flex-col items-center gap-6 pb-8 text-center">
+      <div className="-mb-4 flex w-full justify-end">
+        <WorkoutActionsMenu workoutId={workout.id} />
+      </div>
       <div className="mt-6 flex h-16 w-16 items-center justify-center rounded-full bg-brand-50 text-brand">
         <PartyPopper size={30} strokeWidth={1.75} />
       </div>
