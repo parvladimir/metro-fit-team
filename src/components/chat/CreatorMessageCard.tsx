@@ -17,6 +17,9 @@ export function CreatorMessageCard({
   time,
   onReply,
   children,
+  menu,
+  editor,
+  edited = false,
 }: {
   name: string;
   avatar: string | null;
@@ -25,6 +28,11 @@ export function CreatorMessageCard({
   onReply: () => void;
   /** Optional attachment (image) rendered between header and text. */
   children?: React.ReactNode;
+  /** Own-message actions (Bearbeiten / Löschen) shown in the header. */
+  menu?: React.ReactNode;
+  /** When set, replaces the rendered text with the inline editor. */
+  editor?: React.ReactNode;
+  edited?: boolean;
 }) {
   const [hint, setHint] = useState(false);
 
@@ -52,6 +60,7 @@ export function CreatorMessageCard({
             Creator
           </button>
         </div>
+        {menu && <div className="ml-auto">{menu}</div>}
       </header>
       {hint && (
         <p className="mt-2 flex items-center gap-1.5 text-[11px] text-neutral-500">
@@ -62,7 +71,9 @@ export function CreatorMessageCard({
 
       {children && <div className="mt-3">{children}</div>}
 
-      {content && (
+      {editor ? (
+        <div className="mt-3">{editor}</div>
+      ) : content && (
         <div
           onClick={onReply}
           className="mt-3 cursor-pointer font-creator text-[15px] leading-[1.6] text-neutral-900"
@@ -71,7 +82,10 @@ export function CreatorMessageCard({
         </div>
       )}
 
-      <p className="mt-2 text-right text-[10px] text-neutral-400">{time}</p>
+      <p className="mt-2 text-right text-[10px] text-neutral-400">
+        {edited && <span className="mr-1.5 italic">bearbeitet</span>}
+        {time}
+      </p>
     </article>
   );
 }

@@ -15,6 +15,9 @@ import { CreatorMessageCard } from '@/components/chat/CreatorMessageCard';
 import { fetchCreators, isCreatorCardMessage } from '@/lib/creator';
 import { ChatMarkdown } from '@/components/chat/ChatMarkdown';
 import { clipboardToMarkdown } from '@/lib/chat-format';
+import { MessageActions } from '@/components/chat/MessageActions';
+import { MessageEditor } from '@/components/chat/MessageEditor';
+import { editMessageAction, deleteMessageAction } from '@/app/(app)/team/chat/actions';
 import { EventSocial } from '@/components/chat/EventSocial';
 import { addReplyOnce, applyReaction, EMPTY_SOCIAL, type EventSocial as Social } from '@/lib/event-social';
 import { toggleSupportAction, sendEventReplyAction, markNotificationsReadAction } from '@/app/(app)/team/chat/actions';
@@ -42,6 +45,7 @@ export function ChatRoom({
   const [messages, setMessages] = useState(initialMessages);
   const [social, setSocial] = useState(initialSocial);
   const [highlightId, setHighlightId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const updateSocial = (id: string, fn: (s: Social) => Social) =>
     setSocial((prev) => ({ ...prev, [id]: fn(prev[id] ?? EMPTY_SOCIAL) }));
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
@@ -157,6 +161,17 @@ export function ChatRoom({
             ]);
           }
         )
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: `team_id=eq.${teamId}` }, (payload) => {
+          // Edits/deletes of an existing message: update the SAME entry in
+          // place. No unread/push side effects — this is not an insert.
+          const row = payload.new as ChatMessage;
+          if (row.parent_message_id) return;
+          if (row.deleted_at) {
+            setMessages((prev) => prev.filter((m) => m.id !== row.id));
+          } else {
+            setMessages((prev) => prev.map((m) => (m.id === row.id ? { ...m, content: row.content, edited_at: row.edited_at } : m)));
+          }
+        })
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'message_reactions', filter: `team_id=eq.${teamId}` }, (payload) => {
           const r = payload.new as { message_id: string; user_id: string };
           updateSocial(r.message_id, (cur) => ({ ...cur, reactors: applyReaction(cur.reactors, r.user_id, true) }));
@@ -195,6 +210,19 @@ export function ChatRoom({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusMessageId]);
+
+  async function saveEdit(id: string, text: string): Promise<string | null> {
+    const res = await editMessageAction(id, text);
+    if (!res.ok) return res.error;
+    setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, content: res.content, edited_at: res.edited_at } : m)));
+    setEditingId(null);
+    return null;
+  }
+
+  async function removeMessage(id: string) {
+    const res = await deleteMessageAction(id);
+    if (res.ok) setMessages((prev) => prev.filter((m) => m.id !== id));
+  }
 
   function toggleSupport(eventId: string) {
     const had = (social[eventId] ?? EMPTY_SOCIAL).reactors.includes(currentUserId);
@@ -363,6 +391,13 @@ export function ChatRoom({
                     content={m.message_type === 'image' || m.content ? m.content : ''}
                     time={new Date(m.created_at).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}
                     onReply={() => setReplyTo(m)}
+                    edited={!!m.edited_at}
+                    menu={mine ? <MessageActions onEdit={() => setEditingId(m.id)} onDelete={() => removeMessage(m.id)} /> : undefined}
+                    editor={
+                      editingId === m.id ? (
+                        <MessageEditor initial={m.content} onSave={(text) => saveEdit(m.id, text)} onCancel={() => setEditingId(null)} />
+                      ) : undefined
+                    }
                   >
                     {m.message_type === 'image' && m.attachment_path && (
                       <ChatImage
@@ -403,22 +438,32 @@ export function ChatRoom({
                         height={m.attachment_height}
                       />
                     )}
-                    {(m.message_type !== 'image' || m.content) && (
-                      <div
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => setReplyTo(m)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' || e.key === ' ') setReplyTo(m);
-                        }}
-                        className={`mt-0.5 max-w-[78vw] cursor-pointer rounded-2xl px-4 py-2.5 text-left text-sm leading-relaxed first:mt-0 ${
-                          mine ? 'bg-brand text-[#00232A]' : 'bg-neutral-100 text-neutral-900'
-                        }`}
-                      >
-                        <ChatMarkdown text={m.content} tone={mine ? 'bubble-own' : 'bubble'} />
+                    {editingId === m.id ? (
+                      <div className="mt-0.5 w-[78vw] max-w-full rounded-2xl bg-neutral-100 p-3">
+                        <MessageEditor initial={m.content} onSave={(text) => saveEdit(m.id, text)} onCancel={() => setEditingId(null)} />
                       </div>
+                    ) : (
+                      (m.message_type !== 'image' || m.content) && (
+                        <div className="mt-0.5 flex items-start gap-1 first:mt-0">
+                          {mine && <MessageActions onEdit={() => setEditingId(m.id)} onDelete={() => removeMessage(m.id)} />}
+                          <div
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => setReplyTo(m)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' || e.key === ' ') setReplyTo(m);
+                            }}
+                            className={`min-w-0 max-w-[78vw] cursor-pointer rounded-2xl px-4 py-2.5 text-left text-sm leading-relaxed ${
+                              mine ? 'bg-brand text-[#00232A]' : 'bg-neutral-100 text-neutral-900'
+                            }`}
+                          >
+                            <ChatMarkdown text={m.content} tone={mine ? 'bubble-own' : 'bubble'} />
+                          </div>
+                        </div>
+                      )
                     )}
                     <span className="mt-0.5 px-1 text-[10px] text-neutral-400">
+                      {m.edited_at && <span className="mr-1 italic">bearbeitet</span>}
                       {new Date(m.created_at).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}
                     </span>
                   </div>

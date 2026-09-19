@@ -579,4 +579,106 @@ describeIntegration('Row Level Security', () => {
       expect((own.data ?? []).length).toBeGreaterThan(0);
     });
   });
+  describe('message editing', () => {
+    let evId: string;
+    let msgId: string;
+
+    beforeAll(async () => {
+      const { data: ev } = await admin.from('messages').insert({ team_id: teamId, user_id: userA.id, content: 'hat ein Training gestartet', message_type: 'system', event_type: 'workout_started', metadata: { title: 'Rücken' } }).select('id').single();
+      evId = ev!.id;
+      const { data: m } = await userB.client.from('messages').insert({ team_id: teamId, user_id: userB.id, content: 'Erster Text' }).select('id').single();
+      msgId = m!.id;
+    });
+
+    it('37. owner edits plain text and Markdown in place: same row, edited_at set, created_at unchanged', async () => {
+      const { data: before } = await admin.from('messages').select('created_at, edited_at').eq('id', msgId).single();
+      expect(before!.edited_at).toBeNull();
+      const r1 = await userB.client.from('messages').update({ content: 'Zweiter Text' }).eq('id', msgId).select('id, content, edited_at, created_at').single();
+      expect(r1.error).toBeNull();
+      expect(r1.data!.id).toBe(msgId);
+      expect(r1.data!.edited_at).not.toBeNull();
+      expect(r1.data!.created_at).toBe(before!.created_at);
+      const md = 'Neu:\n\n* **Fett** und *kursiv*\n* [Link](https://a.de)';
+      const r2 = await userB.client.from('messages').update({ content: md }).eq('id', msgId).select('content').single();
+      expect(r2.data!.content).toBe(md);
+    });
+
+    it('38. another member cannot edit or delete it; an outsider cannot either', async () => {
+      const other = await userA.client.from('messages').update({ content: 'gehackt' }).eq('id', msgId).select('id');
+      expect(other.data ?? []).toEqual([]);
+      const del = await userA.client.from('messages').update({ deleted_at: new Date().toISOString() }).eq('id', msgId).select('id');
+      expect(del.data ?? []).toEqual([]);
+      const out = await outsider.client.from('messages').update({ content: 'x' }).eq('id', msgId).select('id');
+      expect(out.data ?? []).toEqual([]);
+      const { data } = await admin.from('messages').select('content, deleted_at').eq('id', msgId).single();
+      expect(data!.content).not.toBe('gehackt');
+      expect(data!.deleted_at).toBeNull();
+    });
+
+    it('39. system/workout events can never be edited, even by their owner', async () => {
+      const r = await userA.client.from('messages').update({ content: 'gefälscht' }).eq('id', evId).select('id');
+      expect(r.data ?? []).toEqual([]);
+      const { data } = await admin.from('messages').select('content').eq('id', evId).single();
+      expect(data!.content).toBe('hat ein Training gestartet');
+    });
+
+    it('40. an edit cannot change sender, team, type, parent or created_at', async () => {
+      for (const patch of [
+        { user_id: userA.id },
+        { team_id: outsiderTeamId },
+        { message_type: 'system' },
+        { parent_message_id: evId },
+        { created_at: '2020-01-01T00:00:00Z' },
+        { event_type: 'workout_started' },
+      ]) {
+        const r = await userB.client.from('messages').update(patch).eq('id', msgId).select('id');
+        expect(r.error !== null || (r.data ?? []).length === 0).toBe(true);
+      }
+      const { data } = await admin.from('messages').select('user_id, team_id, message_type, parent_message_id').eq('id', msgId).single();
+      expect(data).toMatchObject({ user_id: userB.id, team_id: teamId, message_type: 'text', parent_message_id: null });
+    });
+
+    it('41. editing does not change unread counts and creates no notification', async () => {
+      await userA.client.from('team_message_read_state').upsert({ user_id: userA.id, team_id: teamId, last_read_at: new Date().toISOString() }, { onConflict: 'user_id,team_id' });
+      const { data: m } = await userB.client.from('messages').insert({ team_id: teamId, user_id: userB.id, content: 'zum Bearbeiten' }).select('id').single();
+      const unreadBefore = Number((await userA.client.rpc('get_unread_chat_count', { p_team_id: teamId })).data);
+      const { count: notifBefore } = await admin.from('notifications').select('id', { count: 'exact', head: true });
+      const r = await userB.client.from('messages').update({ content: 'bearbeitet 1' }).eq('id', m!.id);
+      expect(r.error).toBeNull();
+      await userB.client.from('messages').update({ content: 'bearbeitet 2' }).eq('id', m!.id);
+      const unreadAfter = Number((await userA.client.rpc('get_unread_chat_count', { p_team_id: teamId })).data);
+      const { count: notifAfter } = await admin.from('notifications').select('id', { count: 'exact', head: true });
+      expect(unreadAfter).toBe(unreadBefore);
+      expect(notifAfter).toBe(notifBefore);
+    });
+
+    it('42. reactions and replies stay attached after the message is edited', async () => {
+      const { data: m } = await userA.client.from('messages').insert({ team_id: teamId, user_id: userA.id, content: 'mit Antworten' }).select('id').single();
+      // reactions/replies target events; edit a human message that itself has a quote reply
+      const quote = await userB.client.from('messages').insert({ team_id: teamId, user_id: userB.id, content: 'Zitat', reply_to_id: m!.id }).select('id').single();
+      await userA.client.from('messages').update({ content: 'geändert' }).eq('id', m!.id);
+      const { data: still } = await admin.from('messages').select('reply_to_id').eq('id', quote.data!.id).single();
+      expect(still!.reply_to_id).toBe(m!.id);
+
+      // event reactions/replies are on system messages: they are untouched by any edit attempt
+      await userB.client.from('message_reactions').insert({ message_id: evId, user_id: userB.id });
+      await userB.client.from('messages').insert({ team_id: teamId, user_id: userB.id, content: 'Antwort', parent_message_id: evId });
+      await userA.client.from('messages').update({ content: 'x' }).eq('id', evId);
+      const { data: rx } = await admin.from('message_reactions').select('id').eq('message_id', evId);
+      const { data: rp } = await admin.from('messages').select('id').eq('parent_message_id', evId);
+      expect((rx ?? []).length).toBe(1);
+      expect((rp ?? []).length).toBe(1);
+    });
+
+    it('43. owner can soft-delete own message but cannot undelete or edit it afterwards', async () => {
+      const { data: m } = await userB.client.from('messages').insert({ team_id: teamId, user_id: userB.id, content: 'weg' }).select('id').single();
+      const del = await userB.client.from('messages').update({ deleted_at: new Date().toISOString() }).eq('id', m!.id).select('id');
+      expect(del.error).toBeNull();
+      expect((del.data ?? []).length).toBe(1);
+      const undo = await userB.client.from('messages').update({ deleted_at: null }).eq('id', m!.id).select('id');
+      expect(undo.error !== null || (undo.data ?? []).length === 0).toBe(true);
+      const { data } = await admin.from('messages').select('deleted_at').eq('id', m!.id).single();
+      expect(data!.deleted_at).not.toBeNull();
+    });
+  });
 });
