@@ -134,6 +134,17 @@ async function main() {
     memberIds.push({ id: user.id, name: member.name });
   }
 
+  // The production creator UUID does not exist in a fresh local Auth stack.
+  // Mark the disposable Vladimir account instead so the creator badge remains
+  // testable without copying a production identity into local development.
+  const localCreator = memberIds.find((member) => member.name === 'Vladimir');
+  if (localCreator) {
+    const { error: creatorError } = await admin
+      .from('platform_creators')
+      .upsert({ user_id: localCreator.id, display_name: 'Volodymyr Parashchak' }, { onConflict: 'user_id' });
+    if (creatorError) throw new Error(`Failed to seed local platform creator: ${creatorError.message}`);
+  }
+
   // ---- exercise lookups (seeded via supabase/seed.sql) ---------------------
   const { data: exercises } = await admin.from('exercises').select('id, name').is('team_id', null);
   const exerciseByName = new Map((exercises ?? []).map((e) => [e.name, e.id]));

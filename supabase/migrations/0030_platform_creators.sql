@@ -18,5 +18,7 @@ revoke all on public.platform_creators from anon, authenticated;
 grant select on public.platform_creators to authenticated;
 
 insert into public.platform_creators (user_id, display_name)
-values ('1d28b13b-575c-488e-bc71-11f447c4915e', 'Volodymyr Parashchak')
+select id, 'Volodymyr Parashchak'
+from public.profiles
+where id = '1d28b13b-575c-488e-bc71-11f447c4915e'
 on conflict (user_id) do nothing;
