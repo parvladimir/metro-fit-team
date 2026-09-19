@@ -15,7 +15,7 @@ export async function sendMessageAction(formData: FormData) {
   const supabase = await createClient();
 
   const teamId = String(formData.get('teamId'));
-  const content = String(formData.get('content') || '').trim();
+  const content = String(formData.get('content') || '').replace(/\r\n?/g, '\n').trim();
   const replyToId = String(formData.get('replyToId') || '') || null;
 
   if (!content) return;
@@ -71,7 +71,7 @@ export async function sendImageMessageAction(input: {
     return { ok: false, error: 'Bild konnte nicht gesendet werden.' };
   }
 
-  const caption = input.caption.trim().slice(0, 2000);
+  const caption = input.caption.replace(/\r\n?/g, '\n').trim().slice(0, 2000);
   const { error } = await supabase.from('messages').insert({
     id: input.messageId,
     team_id: input.teamId,
