@@ -13,6 +13,8 @@ import { Avatar } from '@/components/ui/Avatar';
 import { resolveAuthorName, FORMER_MEMBER_LABEL } from '@/lib/chat-identity';
 import { CreatorMessageCard } from '@/components/chat/CreatorMessageCard';
 import { fetchCreators, isCreatorCardMessage } from '@/lib/creator';
+import { ChatMarkdown } from '@/components/chat/ChatMarkdown';
+import { clipboardToMarkdown } from '@/lib/chat-format';
 import { EventSocial } from '@/components/chat/EventSocial';
 import { addReplyOnce, applyReaction, EMPTY_SOCIAL, type EventSocial as Social } from '@/lib/event-social';
 import { toggleSupportAction, sendEventReplyAction, markNotificationsReadAction } from '@/app/(app)/team/chat/actions';
@@ -53,6 +55,35 @@ export function ChatRoom({
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const activeTeamRef = useRef(teamId);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+
+  function autoGrow(el: HTMLTextAreaElement) {
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  }
+
+  // Formatted pastes (ChatGPT, web, Docs) are converted to the app's Markdown
+  // subset BEFORE saving — never raw HTML, never flattened to one paragraph.
+  function onComposerPaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const html = e.clipboardData.getData('text/html');
+    const text = e.clipboardData.getData('text/plain');
+    if (!html && !text) return;
+    const md = clipboardToMarkdown({ html, text }, (h) => new DOMParser().parseFromString(h, 'text/html').body);
+    e.preventDefault();
+    const el = e.currentTarget;
+    const start = el.selectionStart ?? el.value.length;
+    const end = el.selectionEnd ?? el.value.length;
+    el.setRangeText(md, start, end, 'end');
+    autoGrow(el);
+  }
+
+  // Desktop: Enter sends, Shift+Enter = new line. Touch devices: Enter = new line.
+  function onComposerKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return;
+    if (window.matchMedia('(pointer: coarse)').matches) return;
+    e.preventDefault();
+    formRef.current?.requestSubmit();
+  }
 
   // Fixed at mount — the divider marks what was unread when the chat was
   // opened, it should not shift around as more messages arrive live.
@@ -373,15 +404,19 @@ export function ChatRoom({
                       />
                     )}
                     {(m.message_type !== 'image' || m.content) && (
-                      <button
-                        type="button"
+                      <div
+                        role="button"
+                        tabIndex={0}
                         onClick={() => setReplyTo(m)}
-                        className={`mt-0.5 max-w-[70vw] break-words rounded-2xl px-4 py-2.5 text-left text-sm first:mt-0 ${
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') setReplyTo(m);
+                        }}
+                        className={`mt-0.5 max-w-[78vw] cursor-pointer rounded-2xl px-4 py-2.5 text-left text-sm leading-relaxed first:mt-0 ${
                           mine ? 'bg-brand text-[#00232A]' : 'bg-neutral-100 text-neutral-900'
                         }`}
                       >
-                        {m.content}
-                      </button>
+                        <ChatMarkdown text={m.content} tone={mine ? 'bubble-own' : 'bubble'} />
+                      </div>
                     )}
                     <span className="mt-0.5 px-1 text-[10px] text-neutral-400">
                       {new Date(m.created_at).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}
@@ -402,11 +437,13 @@ export function ChatRoom({
           if (attachment) {
             await sendImage(String(formData.get('content') || ''));
             formRef.current?.reset();
+            if (composerRef.current) composerRef.current.style.height = 'auto';
             setReplyTo(null);
             return;
           }
           await sendMessageAction(formData);
           formRef.current?.reset();
+          if (composerRef.current) composerRef.current.style.height = 'auto';
           setReplyTo(null);
         }}
         className="flex shrink-0 flex-col gap-2 border-t border-neutral-200 bg-neutral-100 px-3 py-3"
@@ -459,12 +496,18 @@ export function ChatRoom({
           >
             <ImagePlus size={20} strokeWidth={1.9} />
           </button>
-          <input
+          <textarea
+            ref={composerRef}
             name="content"
+            rows={1}
+            maxLength={2000}
             placeholder={attachment ? 'Bildunterschrift (optional)' : t('chat.placeholder')}
             required={!attachment}
             autoComplete="off"
-            className="input-field min-w-0 flex-1"
+            onInput={(e) => autoGrow(e.currentTarget)}
+            onPaste={onComposerPaste}
+            onKeyDown={onComposerKeyDown}
+            className="input-field max-h-40 min-w-0 flex-1 resize-none overflow-y-auto leading-snug"
           />
           <SendButton label={t('chat.send')} />
         </div>

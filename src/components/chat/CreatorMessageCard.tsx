@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { Crown, ShieldCheck, Sparkles } from 'lucide-react';
 import { Avatar } from '@/components/ui/Avatar';
-import { linkify } from '@/lib/creator';
+import { ChatMarkdown } from '@/components/chat/ChatMarkdown';
 
 const CREATOR_HINT = 'Ersteller der METRO Fit Team App';
 
@@ -65,24 +65,9 @@ export function CreatorMessageCard({
       {content && (
         <div
           onClick={onReply}
-          className="mt-3 cursor-pointer whitespace-pre-wrap break-words font-creator text-[15px] leading-relaxed text-neutral-900 [overflow-wrap:anywhere]"
+          className="mt-3 cursor-pointer font-creator text-[15px] leading-[1.6] text-neutral-900"
         >
-          {linkify(content).map((part, i) =>
-            part.type === 'link' ? (
-              <a
-                key={i}
-                href={part.href}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={(e) => e.stopPropagation()}
-                className="font-semibold text-brand underline decoration-brand/40 underline-offset-2"
-              >
-                {part.value}
-              </a>
-            ) : (
-              <span key={i}>{part.value}</span>
-            )
-          )}
+          <ChatMarkdown text={content} />
         </div>
       )}
 

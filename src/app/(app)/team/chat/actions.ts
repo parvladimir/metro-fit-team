@@ -8,6 +8,7 @@ import { notifyEventOwner, notifyTeamOfNewChatMessage } from '@/lib/server/push'
 import { createAdminClient } from '@/lib/supabase/admin';
 import { cleanReply, isValidMessageId, type EventReply } from '@/lib/event-social';
 import { resolveAuthorName } from '@/lib/chat-identity';
+import { stripMarkdown } from '@/lib/chat-format';
 
 export async function sendMessageAction(formData: FormData) {
   const user = await requireAuthUser();
@@ -27,7 +28,7 @@ export async function sendMessageAction(formData: FormData) {
   // (Vercel's waitUntil) so it never adds latency to sending a message —
   // and notifyTeamOfNewChatMessage itself swallows every failure, so a bad
   // subscription or provider outage can never surface here either way.
-  waitUntil(notifyTeamOfNewChatMessage({ teamId, senderId: user.id, content: trimmedContent }));
+  waitUntil(notifyTeamOfNewChatMessage({ teamId, senderId: user.id, content: stripMarkdown(trimmedContent) }));
 }
 
 export type SendImageResult = { ok: true } | { ok: false; error: string };
