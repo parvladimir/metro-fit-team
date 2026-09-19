@@ -4,6 +4,10 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:setup": "node scripts/setup-local-dev.mjs",
+    "dev:db:start": "npx supabase start",
+    "dev:db:stop": "npx supabase stop",
+    "dev:db:reset": "npx supabase db reset",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",

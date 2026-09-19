@@ -18,10 +18,40 @@ export function getAdminClient() {
   });
 }
 
+/**
+ * Demo seeding uses the service-role key and can create or update many rows.
+ * Refuse remote targets unless the operator explicitly opts into a disposable
+ * remote DEV project. Production Vercel environments can never bypass this.
+ */
+export function assertSafeSeedTarget() {
+  const rawUrl = required('NEXT_PUBLIC_SUPABASE_URL');
+  let hostname: string;
+
+  try {
+    hostname = new URL(rawUrl).hostname;
+  } catch {
+    throw new Error('NEXT_PUBLIC_SUPABASE_URL is not a valid URL.');
+  }
+
+  const isLocal = ['127.0.0.1', 'localhost', 'host.docker.internal'].includes(hostname);
+  if (isLocal) return;
+
+  const explicitlyAllowed = process.env.ALLOW_REMOTE_DEV_SEED === 'true';
+  const isProduction = process.env.NODE_ENV === 'production' || process.env.VERCEL_ENV === 'production';
+
+  if (explicitlyAllowed && !isProduction) return;
+
+  throw new Error(
+    `Refusing to seed non-local Supabase host "${hostname}". ` +
+      'Use the local DEV setup, or set ALLOW_REMOTE_DEV_SEED=true only for a disposable remote DEV project.'
+  );
+}
+
 export function getEnv() {
   return {
     initialAdminEmail: (process.env.INITIAL_ADMIN_EMAIL || '').trim().toLowerCase(),
     initialTeamName: process.env.INITIAL_TEAM_NAME || 'Fitness Team',
+    demoUserPassword: process.env.DEMO_USER_PASSWORD || null,
   };
 }
 
