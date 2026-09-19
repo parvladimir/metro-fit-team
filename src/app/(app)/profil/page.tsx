@@ -47,12 +47,12 @@ export default async function ProfilPage() {
       )}
 
       <div className="flex flex-col gap-2.5">
-        <MenuLink href="/profil/fortschritt" icon={TrendingUp} label={t('chart.progress.title')} />
-        <MenuLink href="/profil/erfolge" icon={Award} label={t('profile.achievements')} />
-        <MenuLink href="/profil/metriken" icon={BarChart3} label={t('metric.manage')} />
-        <MenuLink href="/profil/datenschutz" icon={Lock} label={t('profile.privacySettings')} />
-        <MenuLink href="/profil/einstellungen" icon={Settings} label={t('profile.appSettings')} />
-        {membership?.role === 'team_admin' && <MenuLink href="/team/verwalten" icon={Wrench} label={t('profile.teamManagement')} />}
+        <MenuLink href="/profil/fortschritt" icon={TrendingUp} accent="#38BDF8" label={t('chart.progress.title')} />
+        <MenuLink href="/profil/erfolge" icon={Award} accent="#F5C04A" label={t('profile.achievements')} />
+        <MenuLink href="/profil/metriken" icon={BarChart3} accent="#2DD4BF" label={t('metric.manage')} />
+        <MenuLink href="/profil/datenschutz" icon={Lock} accent="#7AA2F7" label={t('profile.privacySettings')} />
+        <MenuLink href="/profil/einstellungen" icon={Settings} accent="#8FB8C6" label={t('profile.appSettings')} />
+        {membership?.role === 'team_admin' && <MenuLink href="/team/verwalten" icon={Wrench} accent="#00D7F5" label={t('profile.teamManagement')} />}
       </div>
 
       <form action={signOutAction}>
@@ -73,20 +73,32 @@ export default async function ProfilPage() {
   );
 }
 
+/** Every stat card uses the identical structure: a fixed-height metric row
+ * (number large, optional unit small, never wraps) and a fixed two-line label
+ * row, so value and label baselines line up across the whole row. */
 function StatCard({ label, value }: { label: string; value: string }) {
+  const [number, ...unit] = value.split(' ');
   return (
-    <div className="card items-center py-3">
-      <p className="text-lg font-extrabold text-neutral-900">{value}</p>
-      <p className="mt-0.5 text-center text-[11px] font-medium text-neutral-500">{label}</p>
+    <div className="card flex flex-col items-center !px-1.5 !py-3.5">
+      <p className="flex h-8 items-baseline justify-center gap-1 whitespace-nowrap leading-none">
+        <span className="text-xl font-extrabold tabular-nums text-neutral-900 max-[340px]:text-lg">{number}</span>
+        {unit.length > 0 && <span className="text-[11px] font-semibold text-neutral-500">{unit.join(' ')}</span>}
+      </p>
+      <p className="mt-1 flex h-[26px] items-start justify-center text-center text-[11px] font-medium leading-[13px] text-neutral-500">
+        {label}
+      </p>
     </div>
   );
 }
 
-function MenuLink({ href, icon: Icon, label }: { href: string; icon: LucideIcon; label: string }) {
+function MenuLink({ href, icon: Icon, label, accent }: { href: string; icon: LucideIcon; label: string; accent: string }) {
   return (
     <Link href={href} className="card flex items-center gap-3 py-3.5">
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-neutral-150 text-neutral-500">
-        <Icon size={18} strokeWidth={1.9} />
+      <span
+        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full"
+        style={{ color: accent, backgroundColor: `${accent}2E`, border: `1px solid ${accent}70`, boxShadow: `0 0 16px -6px ${accent}80` }}
+      >
+        <Icon size={19} strokeWidth={2} />
       </span>
       <span className="flex-1 text-sm font-semibold text-neutral-900">{label}</span>
       <ChevronRight size={18} className="shrink-0 text-neutral-300" />
