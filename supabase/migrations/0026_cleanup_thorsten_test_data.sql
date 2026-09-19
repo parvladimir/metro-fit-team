@@ -27,17 +27,26 @@ declare
   n int;
 begin
   select id into v_team from public.teams where name = 'METRO Marl Fitness Team' limit 1;
-  if v_team is null then raise exception 'cleanup aborted: team not found'; end if;
+  if v_team is null then
+    raise notice 'cleanup skipped: production team not present (expected on a fresh local database)';
+    return;
+  end if;
 
   select tm.joined_at into v_cutoff
   from public.team_members tm join public.profiles p on p.id = tm.user_id
   where tm.team_id = v_team and p.full_name ilike 'volodymyr parashchak' limit 1;
-  if v_cutoff is null then raise exception 'cleanup aborted: cutoff member not found'; end if;
+  if v_cutoff is null then
+    raise notice 'cleanup skipped: cutoff member not present';
+    return;
+  end if;
 
   select p.id into v_thorsten
   from public.team_members tm join public.profiles p on p.id = tm.user_id
   where tm.team_id = v_team and tm.role = 'team_admin' and p.full_name = 'Thorsten Roloff' limit 1;
-  if v_thorsten is null then raise exception 'cleanup aborted: admin not found'; end if;
+  if v_thorsten is null then
+    raise notice 'cleanup skipped: admin not present';
+    return;
+  end if;
 
   raise notice 'cleanup cutoff = %, admin = %', v_cutoff, v_thorsten;
 
