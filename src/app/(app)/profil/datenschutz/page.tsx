@@ -18,7 +18,7 @@ export default async function DatenschutzPage() {
         <h1 className="text-xl font-bold text-neutral-900">{t('privacy.title')}</h1>
       </div>
 
-      <p className="rounded-xl bg-neutral-100 px-4 py-3 text-xs text-neutral-500">{t('privacy.description')}</p>
+      <p className="rounded-xl border border-white/[0.06] bg-surface-1 px-4 py-3 text-xs text-neutral-600">{t('privacy.description')}</p>
 
       <form action={updatePrivacySettingsAction} className="flex flex-col gap-4">
         <div>

@@ -29,18 +29,18 @@ export default async function ProfilPage() {
       </Link>
 
       <div className="grid grid-cols-3 gap-3">
-        <StatCard label={t('profile.weeklyGoal')} value={`${profile.weekly_goal}`} />
-        <StatCard label={t('profile.streak')} value={t('profile.streakWeeks', { weeks: stats.streakWeeks })} />
-        <StatCard label={t('profile.totalWorkouts')} value={`${stats.totalWorkouts}`} />
+        <StatCard accent="primary" label={t('profile.weeklyGoal')} value={`${profile.weekly_goal}`} />
+        <StatCard accent="gold" label={t('profile.streak')} value={t('profile.streakWeeks', { weeks: stats.streakWeeks })} />
+        <StatCard accent="team" label={t('profile.totalWorkouts')} value={`${stats.totalWorkouts}`} />
       </div>
 
       {membership && (
-        <div className="card flex items-center justify-between">
+        <div className="card accent-team card-accent flex items-center justify-between">
           <div>
             <p className="section-title">{t('profile.team')}</p>
             <p className="text-base font-semibold text-neutral-900">{membership.team_name}</p>
           </div>
-          <span className="rounded-full bg-neutral-100 px-2.5 py-1 text-xs font-semibold text-neutral-600">
+          <span className="rounded-full border border-brand/30 bg-brand/10 px-2.5 py-1 text-xs font-semibold text-brand">
             {t(`admin.role.${membership.role}` as const)}
           </span>
         </div>
@@ -56,7 +56,7 @@ export default async function ProfilPage() {
       </div>
 
       <form action={signOutAction}>
-        <button type="submit" className="btn-ghost w-full bg-neutral-100 text-neutral-700">{t('auth.signOut')}</button>
+        <button type="submit" className="btn-ghost w-full !border-white/[0.08] bg-surface-3 text-neutral-700">{t('auth.signOut')}</button>
       </form>
 
       <footer className="pb-safe-b pt-2 text-center text-xs text-neutral-500">
@@ -76,10 +76,10 @@ export default async function ProfilPage() {
 /** Every stat card uses the identical structure: a fixed-height metric row
  * (number large, optional unit small, never wraps) and a fixed two-line label
  * row, so value and label baselines line up across the whole row. */
-function StatCard({ label, value }: { label: string; value: string }) {
+function StatCard({ label, value, accent }: { label: string; value: string; accent: string }) {
   const [number, ...unit] = value.split(' ');
   return (
-    <div className="card flex flex-col items-center !px-1.5 !py-3.5">
+    <div className={`card accent-${accent} card-accent flex flex-col items-center !px-1.5 !py-3.5`}>
       <p className="flex h-8 items-baseline justify-center gap-1 whitespace-nowrap leading-none">
         <span className="text-xl font-extrabold tabular-nums text-neutral-900 max-[340px]:text-lg">{number}</span>
         {unit.length > 0 && <span className="text-[11px] font-semibold text-neutral-500">{unit.join(' ')}</span>}
@@ -93,7 +93,7 @@ function StatCard({ label, value }: { label: string; value: string }) {
 
 function MenuLink({ href, icon: Icon, label, accent }: { href: string; icon: LucideIcon; label: string; accent: string }) {
   return (
-    <Link href={href} className="card flex items-center gap-3 py-3.5">
+    <Link href={href} className="list-row">
       <span
         className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full"
         style={{ color: accent, backgroundColor: `${accent}2E`, border: `1px solid ${accent}70`, boxShadow: `0 0 16px -6px ${accent}80` }}
@@ -101,7 +101,7 @@ function MenuLink({ href, icon: Icon, label, accent }: { href: string; icon: Luc
         <Icon size={19} strokeWidth={2} />
       </span>
       <span className="flex-1 text-sm font-semibold text-neutral-900">{label}</span>
-      <ChevronRight size={18} className="shrink-0 text-neutral-300" />
+      <ChevronRight size={18} className="shrink-0 text-neutral-400" />
     </Link>
   );
 }

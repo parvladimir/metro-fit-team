@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { ProgressBar } from '@/components/ui/ProgressBar';
 import { Trophy } from 'lucide-react';
 import { BackLink } from '@/components/ui/BackLink';
 import { requireAuthUser, getPrimaryTeamMembership } from '@/lib/data/profile';
@@ -39,29 +40,26 @@ export default async function HerausforderungenPage() {
       ) : (
         <div className="flex flex-col gap-3">
           {challenges.map((c) => (
-            <div key={c.id} className="card">
+            <div key={c.id} className={`card card-accent ${c.isCompleted ? 'accent-success' : 'accent-challenge'}`}>
               <div className="flex items-start justify-between gap-2">
                 <div>
                   <p className="text-base font-bold text-neutral-900">{c.title}</p>
                   {c.description && <p className="mt-0.5 text-xs text-neutral-500">{c.description}</p>}
                 </div>
-                <span className="shrink-0 rounded-full bg-neutral-100 px-2 py-1 text-[10px] font-semibold uppercase text-neutral-500">
+                <span className="shrink-0 rounded-full border border-white/10 bg-surface-3 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-neutral-600">
                   {t(`challenge.type.${c.challenge_type}` as const)}
                 </span>
               </div>
 
-              <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-neutral-100">
-                <div
-                  className="h-full rounded-full bg-brand"
-                  style={{ width: `${Math.min(100, (c.myProgress / c.target_value) * 100)}%` }}
-                />
+              <div className="mt-3">
+                <ProgressBar tone={c.isCompleted ? 'success' : 'challenge'} percent={(c.myProgress / c.target_value) * 100} />
               </div>
               <div className="mt-1.5 flex items-center justify-between text-xs text-neutral-500">
                 <span>{t('challenge.progress', { current: Math.round(c.myProgress), target: c.target_value })}</span>
                 <span>{t('challenge.deadline', { date: formatGermanDate(c.ends_at) })}</span>
               </div>
 
-              {c.isCompleted && <p className="mt-2 text-sm font-semibold text-emerald-400">{t('challenge.completed')}</p>}
+              {c.isCompleted && <p className="mt-2 text-sm font-semibold text-accent-success">{t('challenge.completed')}</p>}
 
               {c.challenge_type === 'individual' && !c.isCompleted && (
                 <form action={joinChallengeAction.bind(null, c.id)} className="mt-3">
