@@ -35,7 +35,7 @@ export default async function ProfilBearbeitenPage() {
             {GOALS.map((goal) => (
               <label
                 key={goal}
-                className="flex cursor-pointer items-center gap-2 rounded-xl border border-neutral-200 bg-neutral-100 px-3 py-3 text-sm font-medium has-[:checked]:border-brand has-[:checked]:bg-brand-50 has-[:checked]:text-brand"
+                className="flex cursor-pointer items-center gap-2 rounded-xl border border-white/[0.1] bg-surface-3 px-3 py-3 text-neutral-700 text-sm font-medium transition-all duration-200 has-[:checked]:border-brand/60 has-[:checked]:bg-brand/[0.14] has-[:checked]:text-brand has-[:checked]:shadow-[0_0_0_1px_rgba(0,215,245,0.25)]"
               >
                 <input
                   type="radio"

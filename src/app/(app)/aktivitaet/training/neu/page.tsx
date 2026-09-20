@@ -30,7 +30,7 @@ export default async function NeuesTrainingPage({ searchParams }: { searchParams
             {ACTIVITY_TYPES.map((type, i) => (
               <label
                 key={type}
-                className="flex cursor-pointer flex-col items-center gap-1 rounded-xl border border-neutral-200 bg-neutral-100 px-2 py-3 text-center text-xs font-medium has-[:checked]:border-brand has-[:checked]:bg-brand-50 has-[:checked]:text-brand"
+                className="flex cursor-pointer flex-col items-center gap-1 rounded-xl border border-white/[0.1] bg-surface-3 px-2 py-3 text-neutral-700 text-center text-xs font-medium transition-all duration-200 has-[:checked]:border-brand/60 has-[:checked]:bg-brand/[0.14] has-[:checked]:text-brand has-[:checked]:shadow-[0_0_0_1px_rgba(0,215,245,0.25)]"
               >
                 <input type="radio" name="activityType" value={type} defaultChecked={i === 0} className="sr-only" required />
                 {t(`activityType.${type}` as const)}

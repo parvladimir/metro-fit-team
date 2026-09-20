@@ -112,13 +112,13 @@ export function AddPlanExerciseForm({
               {normalizeExerciseType(selected.exercise_type) === 'bodyweight' && (
                 <>
                   <input type="hidden" name="targetMode" value={bwMode} />
-                  <div className="flex gap-1 rounded-xl bg-neutral-150 p-1 text-xs font-semibold">
+                  <div className="segmented !rounded-xl text-xs">
                     {(['reps', 'duration'] as const).map((m) => (
                       <button
                         key={m}
                         type="button"
                         onClick={() => setBwMode(m)}
-                        className={`flex-1 rounded-lg py-2 transition ${bwMode === m ? 'bg-neutral-100 text-neutral-900' : 'text-neutral-400'}`}
+                        className={`segmented-item !rounded-lg !py-2 !text-xs ${bwMode === m ? 'segmented-item-active' : ''}`}
                       >
                         {m === 'reps' ? 'Wiederholungen' : 'Dauer'}
                       </button>

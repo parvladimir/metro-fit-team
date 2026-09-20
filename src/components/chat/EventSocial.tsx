@@ -59,7 +59,7 @@ export function EventSocial({
           aria-pressed={supported}
           aria-label={supported ? 'Unterstützung zurücknehmen' : 'Training unterstützen'}
           className={`inline-flex min-h-[32px] items-center gap-1.5 rounded-full px-3 text-xs font-semibold transition active:scale-95 ${
-            supported ? 'bg-brand/15 text-brand ring-1 ring-brand/40' : 'bg-neutral-150 text-neutral-500'
+            supported ? 'bg-brand/15 text-brand ring-1 ring-brand/40' : 'border border-white/[0.08] bg-surface-3 text-neutral-600'
           }`}
         >
           <Heart size={14} strokeWidth={2.25} className={supported ? 'fill-current' : ''} />
@@ -69,7 +69,7 @@ export function EventSocial({
           type="button"
           onClick={() => setComposerOpen((v) => !v)}
           aria-expanded={composerOpen}
-          className="inline-flex min-h-[32px] items-center gap-1.5 rounded-full bg-neutral-150 px-3 text-xs font-semibold text-neutral-500 transition active:scale-95"
+          className="inline-flex min-h-[32px] items-center gap-1.5 rounded-full border border-white/[0.08] bg-surface-3 px-3 text-xs font-semibold text-neutral-600 transition active:scale-95"
         >
           <MessageCircle size={14} strokeWidth={2.25} />
           {replies.length > 0 ? repliesLabel(replies.length) : 'Antworten'}

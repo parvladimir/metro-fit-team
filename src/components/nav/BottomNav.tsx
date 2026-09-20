@@ -76,10 +76,22 @@ export function BottomNav({ teamId, initialUnreadCount }: { teamId: string | nul
 
   return (
     <nav
-      className="sticky bottom-0 z-30 mx-auto w-full max-w-app bg-[#04141a]/85 px-3 pb-safe-b pt-2 backdrop-blur-md"
+      className="sticky bottom-0 z-30 mx-auto w-full max-w-app px-3 pt-4"
+      style={{
+        // content fades out under the bar instead of colliding with it; safe-area aware
+        paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))',
+        background: 'linear-gradient(to top, #04141a 62%, rgba(4, 20, 26, 0) 100%)',
+      }}
       aria-label="Hauptnavigation"
     >
-      <div className="flex items-stretch justify-around rounded-[28px] border border-white/5 bg-neutral-100 px-1.5 py-1.5 shadow-[0_1px_0_rgba(255,255,255,0.04)_inset,0_16px_32px_-16px_rgba(0,0,0,0.6)]">
+      <div
+        className="flex items-stretch justify-around rounded-[30px] border border-white/[0.12] px-1.5 py-1.5 backdrop-blur-xl"
+        style={{
+          background: 'linear-gradient(180deg, rgba(31, 56, 62, 0.92) 0%, rgba(17, 38, 43, 0.96) 100%)',
+          boxShadow:
+            'inset 0 1px 0 rgba(0, 215, 245, 0.22), inset 0 -1px 0 rgba(0, 0, 0, 0.3), 0 -10px 30px -14px rgba(0, 215, 245, 0.18), 0 16px 32px -14px rgba(0, 0, 0, 0.75)',
+        }}
+      >
         {ITEMS.map(({ href, key, icon: Icon }) => {
           const active = href === '/' ? pathname === '/' : pathname.startsWith(href);
           const showBadge = href === '/team' && unreadCount > 0;
@@ -87,24 +99,29 @@ export function BottomNav({ teamId, initialUnreadCount }: { teamId: string | nul
             <Link
               key={href}
               href={href}
+              aria-current={active ? 'page' : undefined}
               className={clsx(
-                'flex min-h-[52px] flex-1 flex-col items-center justify-center gap-0.5 rounded-full py-2 text-[11px] font-semibold transition-all duration-200 ease-out',
+                'relative flex min-h-[54px] flex-1 flex-col items-center justify-center gap-[3px] rounded-full py-2 text-[11px] leading-none transition-all duration-200 ease-out active:scale-95',
                 active
-                  ? 'bg-gradient-to-b from-brand/[0.16] to-brand/[0.06] text-brand shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_0_0_1px_rgba(0,215,245,0.18)]'
-                  : 'text-[#6F8E95]'
+                  ? 'bg-gradient-to-b from-brand/[0.26] to-brand/[0.09] font-bold text-brand shadow-[inset_0_1px_0_rgba(255,255,255,0.14),0_0_0_1px_rgba(0,215,245,0.4),0_6px_16px_-8px_rgba(0,215,245,0.55)]'
+                  : 'font-semibold text-[#93B2B8]'
               )}
             >
-              <span className="relative">
-                <Icon size={23} strokeWidth={active ? 2.4 : 1.9} className={`transition-all duration-200 ${active ? 'scale-105 text-[#5CF0FF]' : 'text-[#5C8790]'}`} />
+              <span className="relative flex h-6 items-center justify-center">
+                <Icon
+                  size={23}
+                  strokeWidth={active ? 2.4 : 2}
+                  className={`transition-all duration-200 ${active ? 'scale-105 text-[#5CF0FF] drop-shadow-[0_0_6px_rgba(0,215,245,0.45)]' : 'text-[#86A9B0]'}`}
+                />
                 {href === '/team' && personalCount > 0 && (
                   <span
-                    className="absolute -left-1 -top-1 h-2.5 w-2.5 rounded-full bg-brand ring-2 ring-neutral-100"
+                    className="absolute -left-1 -top-1 h-2.5 w-2.5 rounded-full bg-brand ring-2 ring-[#152a2e]"
                     role="status"
                     aria-label="Neue Reaktionen oder Antworten"
                   />
                 )}
                 {showBadge && (
-                  <span className="absolute -right-2 -top-1.5 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-brand px-1 text-[9px] font-bold leading-none text-[#00232A]">
+                  <span className="absolute -right-2.5 -top-1.5 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-brand px-1 text-[9px] font-bold leading-none text-[#00232A] ring-2 ring-[#152a2e]">
                     {unreadCount > 9 ? '9+' : unreadCount}
                   </span>
                 )}

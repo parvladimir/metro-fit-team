@@ -492,7 +492,9 @@ export function ChatRoom({
                               if (e.key === 'Enter' || e.key === ' ') setReplyTo(m);
                             }}
                             className={`min-w-0 max-w-[78vw] cursor-pointer rounded-2xl px-4 py-2.5 text-left text-sm leading-relaxed ${
-                              mine ? 'bg-brand text-[#00232A]' : 'bg-neutral-100 text-neutral-900'
+                              mine
+                                ? 'bg-gradient-to-b from-[#2fe3fb] to-[#00c4e2] text-[#00232A] shadow-[inset_0_1px_0_rgba(255,255,255,0.35),0_6px_14px_-8px_rgba(0,215,245,0.5)]'
+                                : 'border border-white/[0.08] bg-surface-3 text-neutral-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]'
                             }`}
                           >
                             <ChatMarkdown text={m.content} tone={mine ? 'bubble-own' : 'bubble'} mentions={mentionsOf(m.id)} currentUserId={currentUserId} />
@@ -530,7 +532,7 @@ export function ChatRoom({
           if (composerRef.current?.el) composerRef.current.el.style.height = 'auto';
           setReplyTo(null);
         }}
-        className="flex shrink-0 flex-col gap-2 border-t border-neutral-200 bg-neutral-100 px-3 py-3"
+        className="flex shrink-0 flex-col gap-2 border-t border-white/[0.08] bg-surface-2 px-3 py-3 shadow-[inset_0_1px_0_rgba(0,215,245,0.12)]"
       >
         <input type="hidden" name="teamId" value={teamId} />
         <input type="hidden" name="replyToId" value={replyTo?.id ?? ''} />
@@ -575,7 +577,7 @@ export function ChatRoom({
             type="button"
             onClick={() => fileInputRef.current?.click()}
             disabled={preparing || sending}
-            className="btn-icon h-11 w-11 shrink-0 bg-neutral-150 text-neutral-500"
+            className="btn-icon h-11 w-11 shrink-0 border border-white/[0.08] bg-surface-3 text-neutral-600"
             aria-label="Foto anhängen"
           >
             <ImagePlus size={20} strokeWidth={1.9} />
@@ -634,7 +636,7 @@ function SystemEventCard({ message, isFirstUnread, label }: { message: ChatMessa
           <span className="h-px flex-1 bg-brand/25" />
         </div>
       )}
-      <div className="mx-auto flex max-w-[88%] items-center gap-2 rounded-full border border-brand/15 bg-brand-50/60 px-3.5 py-1.5 text-center text-xs text-neutral-500">
+      <div className="mx-auto flex max-w-[88%] items-center gap-2 rounded-full border border-brand/25 bg-gradient-to-b from-brand/[0.12] to-brand/[0.04] px-3.5 py-1.5 text-center text-xs text-neutral-600 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
         <Icon size={14} strokeWidth={2} className="shrink-0 text-brand" />
         <span className="min-w-0 break-words">{formatSystemEvent(message.authorName, message.event_type, message.metadata ?? {})}</span>
       </div>

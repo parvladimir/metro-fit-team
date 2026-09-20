@@ -35,7 +35,7 @@ export default async function ChatPage({ searchParams }: { searchParams: Promise
   return (
     <div className="-mb-6 flex h-full min-h-0 flex-1 flex-col">
       <div
-        className="flex shrink-0 items-center gap-3 border-b border-neutral-200 bg-neutral-100 px-4 pb-3"
+        className="flex shrink-0 items-center gap-3 border-b border-white/[0.08] bg-surface-2 px-4 pb-3 shadow-[0_8px_20px_-14px_rgba(0,0,0,0.7)]"
         // Safe-area inset + extra breathing room so the header never sits tight under the status bar / Dynamic Island.
         style={{ paddingTop: 'max(1rem, calc(env(safe-area-inset-top) + 1rem))' }}
       >

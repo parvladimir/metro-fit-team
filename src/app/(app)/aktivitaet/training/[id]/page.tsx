@@ -116,8 +116,8 @@ export default async function TrainingDetailPage({ params }: { params: Promise<{
         </Link>
       </form>
 
-      <div className="fixed bottom-16 left-1/2 z-20 w-full max-w-app -translate-x-1/2 px-4">
-        <div className="flex gap-2 rounded-2xl bg-neutral-100 p-2 shadow-lg ring-1 ring-neutral-100">
+      <div className="fixed left-1/2 z-20 w-full max-w-app -translate-x-1/2 px-4" style={{ bottom: 'calc(5.25rem + env(safe-area-inset-bottom))' }}>
+        <div className="flex gap-2 rounded-2xl border border-white/[0.1] p-2 shadow-lg backdrop-blur-xl" style={{ background: 'linear-gradient(180deg, rgba(31,56,62,0.94), rgba(17,38,43,0.97))' }}>
           <form action={skipWorkoutAction.bind(null, workout.id)} className="flex-1">
             <button type="submit" className="btn-secondary w-full">{t('workout.skip')}</button>
           </form>

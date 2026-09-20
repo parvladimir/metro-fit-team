@@ -14,7 +14,7 @@ export default function NeueMessungPage() {
         <h1 className="text-xl font-bold text-neutral-900">{t('measurement.add')}</h1>
       </div>
 
-      <p className="flex items-center gap-1.5 rounded-xl bg-neutral-100 px-4 py-3 text-xs text-neutral-500">
+      <p className="flex items-center gap-1.5 rounded-xl border border-white/[0.06] bg-surface-1 px-4 py-3 text-xs text-neutral-600">
         <Lock size={13} strokeWidth={2} className="shrink-0" />
         {t('measurement.private.notice')}
       </p>
