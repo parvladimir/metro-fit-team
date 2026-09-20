@@ -13,6 +13,8 @@ export interface DashboardData {
     workoutsDeltaPct: number | null;
   };
   rank: number | null;
+  /** public ranking context for the coach header */
+  rankInfo: { teamSize: number; pointsToNext: number | null };
   todayPlanDay: (WorkoutPlanDay & { exerciseCount: number }) | null;
   todayWorkout: Workout | null;
   activeChallenge: (Challenge & { myProgress: number; participantCount: number }) | null;
@@ -104,10 +106,15 @@ export async function getDashboardData(profile: Profile, teamId: string | null):
   };
 
   let rank: number | null = null;
+  let rankInfo: DashboardData['rankInfo'] = { teamSize: 0, pointsToNext: null };
   if (teamId) {
     const sorted = (rankingRows ?? []) as { user_id: string; points: number }[];
     const idx = sorted.findIndex((r) => r.user_id === profile.id);
     rank = idx >= 0 ? idx + 1 : null;
+    rankInfo = {
+      teamSize: sorted.length,
+      pointsToNext: idx > 0 ? Math.max(0, Number(sorted[idx - 1]!.points) - Number(sorted[idx]!.points)) : null,
+    };
   }
 
   let todayPlanDay: DashboardData['todayPlanDay'] = null;
@@ -142,6 +149,7 @@ export async function getDashboardData(profile: Profile, teamId: string | null):
       workoutsDeltaPct: workoutsRow ? pctChange(workoutsRow.current_value, workoutsRow.previous_value) : null,
     },
     rank,
+    rankInfo,
     todayPlanDay,
     todayWorkout: (todayWorkout as Workout) ?? null,
     activeChallenge,
