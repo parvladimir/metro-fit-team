@@ -98,6 +98,17 @@ body {
     border: 1px solid rgb(var(--card-rgb, var(--accent-primary-rgb)) / 0.3);
   }
 
+  /* Coach header: one-shot entrance animations (no looping). */
+  .coach-pop {
+    animation: coach-pop 650ms var(--ease-out) both;
+  }
+  .coach-fade-up {
+    animation: coach-fade-up 380ms var(--ease-out) both;
+  }
+  .coach-glow {
+    animation: coach-glow 1100ms var(--ease-out) both;
+  }
+
   /* Pressable surfaces: 150-300ms, respects reduced motion via the global rule. */
   .press {
     transition: transform 180ms var(--ease-out), background-color 180ms var(--ease-out), border-color 180ms var(--ease-out);
@@ -279,4 +290,19 @@ body {
   .scrollbar-hide::-webkit-scrollbar {
     display: none;
   }
+}
+
+@keyframes coach-pop {
+  0% { opacity: 0; transform: scale(0.5) rotate(-24deg); }
+  60% { opacity: 1; transform: scale(1.18) rotate(6deg); }
+  100% { opacity: 1; transform: scale(1) rotate(0deg); }
+}
+@keyframes coach-fade-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes coach-glow {
+  0% { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 0 0 0 rgb(var(--card-rgb) / 0); }
+  40% { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 0 30px 2px rgb(var(--card-rgb) / 0.45); }
+  100% { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 0 26px -16px rgb(var(--card-rgb) / 0.7); }
 }

@@ -2,6 +2,9 @@ import Link from 'next/link';
 import { Medal, Trophy, Dumbbell, PlusCircle, Timer, Zap, Moon, CalendarPlus } from 'lucide-react';
 import { getAuthUser, getCurrentProfile, getPrimaryTeamMembership } from '@/lib/data/profile';
 import { getDashboardData } from '@/lib/data/dashboard';
+import { getCoachData } from '@/lib/data/coach';
+import { CoachHeader } from '@/components/dashboard/CoachHeader';
+import { berlinWallClock, type CoachInput } from '@/lib/coach';
 import { ProgressRing } from '@/components/ui/ProgressRing';
 import { WeeklyChart } from '@/components/dashboard/WeeklyChart';
 import { t } from '@/lib/i18n';
@@ -19,11 +22,31 @@ export default async function DashboardPage() {
   const data = await getDashboardData(profile, membership?.team_id ?? null);
 
   const goalPercent = data.weekly.weeklyGoal > 0 ? (data.weekly.completedWorkouts / data.weekly.weeklyGoal) * 100 : 0;
-  const firstName = (profile.full_name || '').split(' ')[0] || 'da';
+  const firstName = (profile.full_name || '').trim().split(/\s+/)[0] || '';
+
+  // Coach header: extra queries run in parallel; any failure falls back to a plain personal message.
+  const coach: Omit<CoachInput, 'firstName' | 'weekly'> = await getCoachData(profile, membership?.team_id ?? null, data).catch(() => ({
+    totalWorkouts: 1,
+    activeWorkout: null,
+    today: null,
+    challenge: null,
+    streakDays: 0,
+    rank: data.rank,
+    teamSize: data.rankInfo.teamSize,
+    pointsToNextRank: null,
+    justFinished: null,
+    record: null,
+    team: null,
+  }));
+  const coachInput: CoachInput = {
+    ...coach,
+    firstName,
+    weekly: { completed: data.weekly.completedWorkouts, goal: data.weekly.weeklyGoal, minutes: data.weekly.minutes, points: data.weekly.points },
+  };
 
   return (
     <div className="screen-padding flex flex-col gap-4 pb-4">
-      <h1 className="text-page-title text-neutral-900">{t('dashboard.greeting', { name: firstName })}</h1>
+      <CoachHeader input={coachInput} userSeed={profile.id} serverWall={berlinWallClock()} serverNowMs={Date.now()} />
 
       {/* DEINE WOCHE — hero ring, Steps-app style: one big friendly number first */}
       <section className="card accent-primary card-accent flex flex-col items-center pt-6 text-center">
