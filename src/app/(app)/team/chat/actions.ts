@@ -4,7 +4,9 @@ import { revalidatePath } from 'next/cache';
 import { waitUntil } from '@vercel/functions';
 import { createClient } from '@/lib/supabase/server';
 import { requireAuthUser } from '@/lib/data/profile';
-import { notifyEventOwner, notifyTeamOfNewChatMessage } from '@/lib/server/push';
+import { notifyEventOwner, notifyMentionedUsers, notifyTeamOfNewChatMessage } from '@/lib/server/push';
+import { parseMentionIds, syncMentions } from '@/lib/server/mentions';
+import type { MessageMention } from '@/lib/mentions';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { cleanReply, isValidMessageId, type EventReply } from '@/lib/event-social';
 import { resolveAuthorName } from '@/lib/chat-identity';
@@ -21,14 +23,30 @@ export async function sendMessageAction(formData: FormData) {
   if (!content) return;
 
   const trimmedContent = content.slice(0, 2000);
-  await supabase.from('messages').insert({ team_id: teamId, user_id: user.id, content: trimmedContent, reply_to_id: replyToId });
+  const { data: created } = await supabase
+    .from('messages')
+    .insert({ team_id: teamId, user_id: user.id, content: trimmedContent, reply_to_id: replyToId })
+    .select('id')
+    .single();
   revalidatePath('/team/chat');
+
+  const mentionIds = parseMentionIds(formData.get('mentions'));
+  const added = created && mentionIds.length
+    ? (await syncMentions(supabase, { messageId: created.id, teamId, content: trimmedContent, requestedIds: mentionIds, authorId: user.id })).added
+    : [];
 
   // Best-effort push fan-out, kept running after the response is sent
   // (Vercel's waitUntil) so it never adds latency to sending a message —
   // and notifyTeamOfNewChatMessage itself swallows every failure, so a bad
   // subscription or provider outage can never surface here either way.
-  waitUntil(notifyTeamOfNewChatMessage({ teamId, senderId: user.id, content: stripMarkdown(trimmedContent) }));
+  waitUntil(
+    (async () => {
+      const handled = created
+        ? await notifyMentionedUsers({ authorId: user.id, messageId: created.id, targetMessageId: created.id, userIds: added, content: trimmedContent })
+        : [];
+      await notifyTeamOfNewChatMessage({ teamId, senderId: user.id, content: stripMarkdown(trimmedContent), excludeUserIds: handled });
+    })()
+  );
 }
 
 export type SendImageResult = { ok: true } | { ok: false; error: string };
@@ -47,6 +65,7 @@ export async function sendImageMessageAction(input: {
   width: number;
   height: number;
   caption: string;
+  mentionUserIds?: string[];
 }): Promise<SendImageResult> {
   const user = await requireAuthUser();
   const supabase = await createClient();
@@ -91,7 +110,15 @@ export async function sendImageMessageAction(input: {
   }
 
   revalidatePath('/team/chat');
-  waitUntil(notifyTeamOfNewChatMessage({ teamId: input.teamId, senderId: user.id, content: caption ? `📷 ${caption}` : '📷 Foto' }));
+  const added = caption && input.mentionUserIds?.length
+    ? (await syncMentions(supabase, { messageId: input.messageId, teamId: input.teamId, content: caption, requestedIds: parseMentionIds(input.mentionUserIds), authorId: user.id })).added
+    : [];
+  waitUntil(
+    (async () => {
+      const handled = await notifyMentionedUsers({ authorId: user.id, messageId: input.messageId, targetMessageId: input.messageId, userIds: added, content: caption });
+      await notifyTeamOfNewChatMessage({ teamId: input.teamId, senderId: user.id, content: caption ? `📷 ${caption}` : '📷 Foto', excludeUserIds: handled });
+    })()
+  );
   return { ok: true };
 }
 
@@ -183,7 +210,7 @@ export type EventReplyResult = { ok: true; reply: EventReply } | { ok: false; er
 
 /** Adds a one-level reply to an activity event (server validates the parent
  * again via a DB trigger) and notifies the event owner. */
-export async function sendEventReplyAction(messageId: string, rawContent: string): Promise<EventReplyResult> {
+export async function sendEventReplyAction(messageId: string, rawContent: string, mentionUserIds: string[] = []): Promise<EventReplyResult> {
   const content = cleanReply(rawContent);
   if (!isValidMessageId(messageId) || !content) return { ok: false, error: 'Bitte eine Antwort eingeben.' };
   const user = await requireAuthUser();
@@ -201,7 +228,18 @@ export async function sendEventReplyAction(messageId: string, rawContent: string
 
   const { data: meta } = await supabase.from('messages').select('metadata').eq('id', messageId).maybeSingle();
   const title = typeof meta?.metadata?.title === 'string' ? (meta.metadata.title as string) : null;
-  waitUntil(notifyEventOwner({ ownerId: event.user_id, actorId: user.id, messageId, kind: 'reply', eventTitle: title, replyContent: content }));
+  const added = mentionUserIds.length
+    ? (await syncMentions(supabase, { messageId: row.id, teamId: event.team_id, content, requestedIds: parseMentionIds(mentionUserIds), authorId: user.id })).added
+    : [];
+  waitUntil(
+    (async () => {
+      const handled = await notifyMentionedUsers({ authorId: user.id, messageId: row.id, targetMessageId: messageId, userIds: added, content });
+      // the owner gets the mention push instead of a second "geantwortet" push
+      if (!handled.includes(event.user_id)) {
+        await notifyEventOwner({ ownerId: event.user_id, actorId: user.id, messageId, kind: 'reply', eventTitle: title, replyContent: content });
+      }
+    })()
+  );
 
   const profile = (row as unknown as { profiles: { full_name: string | null; avatar_url: string | null } | null }).profiles;
   return {
@@ -226,19 +264,19 @@ export async function markNotificationsReadAction(messageId?: string) {
     .from('notifications')
     .update({ read_at: new Date().toISOString() })
     .eq('user_id', user.id)
-    .eq('category', 'reaktion_antwort')
+    .in('category', ['reaktion_antwort', 'erwaehnung'])
     .is('read_at', null);
   if (messageId && isValidMessageId(messageId)) q = q.eq('message_id', messageId);
   await q;
 }
 
-export type EditMessageResult = { ok: true; content: string; edited_at: string } | { ok: false; error: string };
+export type EditMessageResult = { ok: true; content: string; edited_at: string; mentions: MessageMention[] } | { ok: false; error: string };
 
 /** Edits the caller's own human message IN PLACE (same row, same id). RLS +
  * the guard_message_update trigger enforce ownership and forbid touching
  * anything but the content. Deliberately sends no push and creates no
  * notification — editing must be silent and never affects unread counts. */
-export async function editMessageAction(messageId: string, rawContent: string): Promise<EditMessageResult> {
+export async function editMessageAction(messageId: string, rawContent: string, mentionUserIds: string[] = []): Promise<EditMessageResult> {
   if (!isValidMessageId(messageId)) return { ok: false, error: 'Nachricht nicht gefunden.' };
   const content = rawContent.replace(/\r\n?/g, '\n').trim().slice(0, 2000);
   const user = await requireAuthUser();
@@ -246,13 +284,21 @@ export async function editMessageAction(messageId: string, rawContent: string): 
 
   const { data: current } = await supabase
     .from('messages')
-    .select('message_type, content')
+    .select('message_type, content, team_id')
     .eq('id', messageId)
     .eq('user_id', user.id)
     .maybeSingle();
   if (!current || current.message_type === 'system') return { ok: false, error: 'Diese Nachricht kann nicht bearbeitet werden.' };
   if (!content && current.message_type !== 'image') return { ok: false, error: 'Die Nachricht darf nicht leer sein.' };
-  if (content === current.content) return { ok: true, content, edited_at: new Date().toISOString() };
+  if (content === current.content) {
+    const { data: rows } = await supabase.from('message_mentions').select('mentioned_user_id, mention_text').eq('message_id', messageId);
+    return {
+      ok: true,
+      content,
+      edited_at: new Date().toISOString(),
+      mentions: (rows ?? []).map((r) => ({ userId: r.mentioned_user_id as string, text: r.mention_text as string })),
+    };
+  }
 
   const { data, error } = await supabase
     .from('messages')
@@ -262,8 +308,18 @@ export async function editMessageAction(messageId: string, rawContent: string): 
     .select('content, edited_at')
     .maybeSingle();
   if (error || !data) return { ok: false, error: 'Nachricht konnte nicht gespeichert werden.' };
+  // Keep the relation in sync with the edited text. NO push here, and the DB
+  // never creates a mention notification for an already-edited message, so
+  // repeated edits can't spam anyone.
+  const { mentions } = await syncMentions(supabase, {
+    messageId,
+    teamId: current.team_id,
+    content: data.content,
+    requestedIds: parseMentionIds(mentionUserIds),
+    authorId: user.id,
+  });
   revalidatePath('/team/chat');
-  return { ok: true, content: data.content, edited_at: data.edited_at ?? new Date().toISOString() };
+  return { ok: true, content: data.content, edited_at: data.edited_at ?? new Date().toISOString(), mentions };
 }
 
 /** Soft-deletes the caller's own human message (deleted_at). */

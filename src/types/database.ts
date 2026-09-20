@@ -379,6 +379,7 @@ export interface NotificationPreferences {
   wochenzusammenfassung: boolean;
   chat_nachrichten: boolean;
   reaktionen_antworten: boolean;
+  erwaehnungen: boolean;
 }
 
 export interface Achievement {

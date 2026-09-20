@@ -1,7 +1,7 @@
 import { MessageCircle } from 'lucide-react';
 import { BackLink } from '@/components/ui/BackLink';
 import { requireAuthUser, getPrimaryTeamMembership } from '@/lib/data/profile';
-import { getRecentMessages, getChatLastReadAt, getEventSocial } from '@/lib/data/chat';
+import { getRecentMessages, getChatLastReadAt, getEventSocial, getMentionMembers, getMessageMentions } from '@/lib/data/chat';
 import { isValidMessageId } from '@/lib/event-social';
 import { ChatRoom } from '@/components/chat/ChatRoom';
 import { ChatPushPrompt } from '@/components/chat/ChatPushPrompt';
@@ -26,7 +26,11 @@ export default async function ChatPage({ searchParams }: { searchParams: Promise
     getChatLastReadAt(membership.team_id, user.id),
   ]);
 
-  const social = await getEventSocial(messages.filter((m) => m.message_type === 'system').map((m) => m.id));
+  const [social, members, mentions] = await Promise.all([
+    getEventSocial(messages.filter((m) => m.message_type === 'system').map((m) => m.id)),
+    getMentionMembers(membership.team_id, user.id),
+    getMessageMentions(messages.filter((m) => m.message_type !== 'system').map((m) => m.id)),
+  ]);
 
   return (
     <div className="-mb-6 flex h-full min-h-0 flex-1 flex-col">
@@ -45,6 +49,8 @@ export default async function ChatPage({ searchParams }: { searchParams: Promise
         initialMessages={messages}
         previousReadAt={previousReadAt}
         initialSocial={social}
+        members={members}
+        initialMentions={mentions}
         focusMessageId={isValidMessageId(message) ? message : null}
       />
     </div>

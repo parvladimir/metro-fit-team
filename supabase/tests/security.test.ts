@@ -838,4 +838,105 @@ describeIntegration('Row Level Security', () => {
       await W.client.rpc('delete_own_workout', { p_workout_id: id });
     });
   });
+  describe('@mentions', () => {
+    let nameA: string;
+    let nameB: string;
+    const say = async (user: typeof userA, content: string, extra: Record<string, unknown> = {}) => {
+      const r = await user.client.from('messages').insert({ team_id: teamId, user_id: user.id, content, ...extra }).select('id').single();
+      expect(r.error).toBeNull();
+      return r.data!.id as string;
+    };
+    const notifs = async (userId: string, kind = 'mention') =>
+      (await admin.from('notifications').select('id, message_id, params, category').eq('user_id', userId).eq('kind', kind)).data ?? [];
+
+    beforeAll(async () => {
+      nameA = 'Alma Admin';
+      nameB = 'Ben Mitglied';
+      await admin.from('profiles').update({ full_name: nameA }).eq('id', userA.id);
+      await admin.from('profiles').update({ full_name: nameB }).eq('id', userB.id);
+      await admin.from('profiles').update({ full_name: 'Olli Outsider' }).eq('id', outsider.id);
+    });
+
+    it('51. author mentions a teammate: relation stored with server-derived text, one in-app notification for that user only', async () => {
+      const id = await say(userA, `@${nameB} kannst du das bitte testen?`);
+      const r = await userA.client.from('message_mentions').insert({ message_id: id, mentioned_user_id: userB.id, mention_text: '@Gefälscht' }).select('mention_text, team_id').single();
+      expect(r.error).toBeNull();
+      expect(r.data!.mention_text).toBe(`@${nameB}`); // client value ignored
+      expect(r.data!.team_id).toBe(teamId);
+      const n = await notifs(userB.id);
+      expect(n.filter((x) => x.message_id === id)).toHaveLength(1);
+      expect(n.find((x) => x.message_id === id)!.category).toBe('erwaehnung');
+      expect((await notifs(userA.id)).filter((x) => x.message_id === id)).toHaveLength(0);
+      const dup = await userA.client.from('message_mentions').insert({ message_id: id, mentioned_user_id: userB.id });
+      expect(dup.error).not.toBeNull();
+    });
+
+    it('52. cannot mention another team\'s member, a made-up id, or someone whose @Name is not in the text', async () => {
+      const id = await say(userA, `@Olli Outsider @${nameB}`);
+      const other = await userA.client.from('message_mentions').insert({ message_id: id, mentioned_user_id: outsider.id });
+      expect(other.error).not.toBeNull();
+      const fake = await userA.client.from('message_mentions').insert({ message_id: id, mentioned_user_id: '00000000-0000-4000-8000-000000000000' });
+      expect(fake.error).not.toBeNull();
+      const id2 = await say(userA, 'ohne Namen');
+      const missing = await userA.client.from('message_mentions').insert({ message_id: id2, mentioned_user_id: userB.id });
+      expect(missing.error).not.toBeNull();
+      expect((await admin.from('message_mentions').select('id').in('message_id', [id, id2])).data).toEqual([]);
+    });
+
+    it('53. only the author can add/remove mentions; outsiders cannot read them; system messages cannot carry any', async () => {
+      const id = await say(userA, `Hi @${nameB}`);
+      const byOther = await userB.client.from('message_mentions').insert({ message_id: id, mentioned_user_id: userA.id });
+      expect(byOther.error).not.toBeNull();
+      await userA.client.from('message_mentions').insert({ message_id: id, mentioned_user_id: userB.id });
+      expect((await outsider.client.from('message_mentions').select('id').eq('message_id', id)).data).toEqual([]);
+      expect((await userB.client.from('message_mentions').select('id').eq('message_id', id)).data).toHaveLength(1);
+      const del = await userB.client.from('message_mentions').delete().eq('message_id', id).select('id');
+      expect(del.data ?? []).toEqual([]);
+      const { data: ev } = await admin.from('messages').insert({ team_id: teamId, user_id: userA.id, content: `@${nameB}`, message_type: 'system', event_type: 'workout_started' }).select('id').single();
+      expect((await admin.from('message_mentions').insert({ message_id: ev!.id, mentioned_user_id: userB.id })).error).not.toBeNull();
+    });
+
+    it('54. editing an old message: adding a mention afterwards creates NO notification, removing works, no spam on repeated edits', async () => {
+      const id = await say(userA, 'Erster Text');
+      const before = (await notifs(userB.id)).length;
+      await userA.client.from('messages').update({ content: `Jetzt mit @${nameB}` }).eq('id', id);
+      const add = await userA.client.from('message_mentions').insert({ message_id: id, mentioned_user_id: userB.id });
+      expect(add.error).toBeNull();
+      expect((await notifs(userB.id)).length).toBe(before);
+      await userA.client.from('messages').update({ content: `Nochmal @${nameB}` }).eq('id', id);
+      expect((await notifs(userB.id)).length).toBe(before);
+      const rm = await userA.client.from('message_mentions').delete().eq('message_id', id).eq('mentioned_user_id', userB.id);
+      expect(rm.error).toBeNull();
+      expect((await admin.from('message_mentions').select('id').eq('message_id', id)).data).toEqual([]);
+    });
+
+    it('55. mention inside a reply to a workout event: reply relation intact, notification opens the event', async () => {
+      const { data: ev } = await admin.from('messages').insert({ team_id: teamId, user_id: userB.id, content: 'hat ein Training gestartet', message_type: 'system', event_type: 'workout_started', metadata: { title: 'Beine' } }).select('id').single();
+      const rep = await userA.client.from('messages').insert({ team_id: teamId, user_id: userA.id, content: `@${nameB} starkes Training 💪`, parent_message_id: ev!.id }).select('id, parent_message_id').single();
+      expect(rep.error).toBeNull();
+      expect(rep.data!.parent_message_id).toBe(ev!.id);
+      await userA.client.from('message_mentions').insert({ message_id: rep.data!.id, mentioned_user_id: userB.id });
+      const n = (await notifs(userB.id)).filter((x) => x.message_id === ev!.id);
+      expect(n).toHaveLength(1);
+    });
+
+    it('56. mentioning does not change unread counts of the mentioned user beyond the normal message', async () => {
+      await userB.client.from('team_message_read_state').upsert({ user_id: userB.id, team_id: teamId, last_read_at: new Date().toISOString() }, { onConflict: 'user_id,team_id' });
+      const before = Number((await userB.client.rpc('get_unread_chat_count', { p_team_id: teamId })).data);
+      const id = await say(userA, `@${nameB} zählt einmal`);
+      await userA.client.from('message_mentions').insert({ message_id: id, mentioned_user_id: userB.id });
+      expect(Number((await userB.client.rpc('get_unread_chat_count', { p_team_id: teamId })).data)).toBe(before + 1);
+    });
+
+    it('57. "Erwähnungen" preference exists (default on); a mentioned user who left the team keeps a readable historical mention', async () => {
+      const pref = await userB.client.from('notification_preferences').select('erwaehnungen').eq('user_id', userB.id).single();
+      expect(pref.data?.erwaehnungen).toBe(true);
+      const id = await say(userA, `Danke @${nameB}`);
+      await userA.client.from('message_mentions').insert({ message_id: id, mentioned_user_id: userB.id });
+      await admin.from('team_members').delete().eq('team_id', teamId).eq('user_id', userB.id);
+      const still = await userA.client.from('message_mentions').select('mention_text').eq('message_id', id);
+      expect(still.data).toEqual([{ mention_text: `@${nameB}` }]);
+      await admin.from('team_members').insert({ team_id: teamId, user_id: userB.id, role: 'member' });
+    });
+  });
 });

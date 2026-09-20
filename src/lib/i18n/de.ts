@@ -362,6 +362,7 @@ export const de = {
   // ---- notifications ------------------------------------------------------------------------
   'notification.category.chat_nachrichten': 'Chat-Nachrichten',
   'notification.category.reaktionen_antworten': 'Reaktionen & Antworten',
+  'notification.category.erwaehnungen': 'Erwähnungen',
   'notification.category.trainingserinnerung': 'Trainingserinnerung',
   'notification.category.wochenziel': 'Wochenziel',
   'notification.category.messungserinnerung': 'Messungserinnerung',

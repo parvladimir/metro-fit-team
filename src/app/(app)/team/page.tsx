@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import clsx from 'clsx';
-import { QrCode, MessageCircle, Trophy, ChevronRight, Users, Heart } from 'lucide-react';
+import { QrCode, MessageCircle, Trophy, ChevronRight, Users, Heart, AtSign } from 'lucide-react';
 import { requireAuthUser, getCurrentProfile, getPrimaryTeamMembership } from '@/lib/data/profile';
 import { getTeamRankingWithProfiles, type RankingPeriod } from '@/lib/data/team';
 import { getTeamChallenges } from '@/lib/data/challenges';
@@ -9,6 +9,7 @@ import { getUnreadChatCount, getRecentNotifications, getUnreadNotificationCount 
 import { NotificationCount } from '@/components/notifications/NotificationDot';
 import { ChatPushPrompt } from '@/components/chat/ChatPushPrompt';
 import { eventDeepLink, inAppNotificationText } from '@/lib/event-social';
+import { stripMarkdown } from '@/lib/chat-format';
 import { UnreadBadge } from '@/components/chat/UnreadBadge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Avatar } from '@/components/ui/Avatar';
@@ -89,7 +90,7 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
       {notifications.length > 0 && (
         <section className="card flex flex-col gap-2">
           <div className="flex items-center justify-between">
-            <p className="section-title">Reaktionen & Antworten</p>
+            <p className="section-title">Benachrichtigungen</p>
             <NotificationCount initial={notificationCount} />
           </div>
           {notifications.map((n) => (
@@ -98,7 +99,9 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
               href={n.message_id ? eventDeepLink(n.message_id) : '/team/chat'}
               className="flex items-start gap-2.5 rounded-xl bg-neutral-50 px-3 py-2.5 transition active:scale-[0.98]"
             >
-              {n.kind === 'reply' ? (
+              {n.kind === 'mention' ? (
+                <AtSign size={15} className="mt-0.5 shrink-0 text-brand" />
+              ) : n.kind === 'reply' ? (
                 <MessageCircle size={15} className="mt-0.5 shrink-0 text-brand" />
               ) : (
                 <Heart size={15} className="mt-0.5 shrink-0 fill-current text-brand" />
@@ -107,8 +110,8 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
                 <p className={`break-words text-sm ${n.read_at ? 'text-neutral-500' : 'font-semibold text-neutral-900'}`}>
                   {inAppNotificationText(n.kind, n.params)}
                 </p>
-                {n.kind === 'reply' && n.params.preview && (
-                  <p className="truncate text-xs text-neutral-400">„{n.params.preview}“</p>
+                {(n.kind === 'reply' || n.kind === 'mention') && n.params.preview && (
+                  <p className="truncate text-xs text-neutral-400">„{stripMarkdown(n.params.preview)}“</p>
                 )}
               </div>
               {!n.read_at && <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-brand" aria-label="Ungelesen" />}

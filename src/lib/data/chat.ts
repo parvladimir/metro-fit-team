@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server';
 import { resolveAuthorName } from '@/lib/chat-identity';
 import { fetchCreators } from '@/lib/creator';
 import type { EventReply, EventSocial } from '@/lib/event-social';
+import type { MentionMember, MessageMention } from '@/lib/mentions';
 import type { Message, Profile } from '@/types/database';
 
 export interface ChatMessage extends Message {
@@ -88,6 +89,8 @@ export async function getEventSocial(eventIds: string[]): Promise<Record<string,
     };
     out[r.parent_message_id]?.replies.push(reply);
   }
+  const replyMentions = await getMessageMentions((replies.data ?? []).map((r) => (r as { id: string }).id));
+  for (const ev of Object.values(out)) for (const reply of ev.replies) reply.mentions = replyMentions[reply.id] ?? [];
   return out;
 }
 
@@ -99,14 +102,14 @@ export async function getUnreadNotificationCount(userId: string): Promise<number
     .from('notifications')
     .select('id', { count: 'exact', head: true })
     .eq('user_id', userId)
-    .eq('category', 'reaktion_antwort')
+    .in('category', ['reaktion_antwort', 'erwaehnung'])
     .is('read_at', null);
   return count ?? 0;
 }
 
 export interface PersonalNotification {
   id: string;
-  kind: 'reaction' | 'reply' | null;
+  kind: 'reaction' | 'reply' | 'mention' | null;
   message_id: string | null;
   params: { actor_name?: string; event_title?: string | null; preview?: string };
   read_at: string | null;
@@ -119,8 +122,35 @@ export async function getRecentNotifications(userId: string, limit = 5): Promise
     .from('notifications')
     .select('id, kind, message_id, params, read_at, created_at')
     .eq('user_id', userId)
-    .eq('category', 'reaktion_antwort')
+    .in('category', ['reaktion_antwort', 'erwaehnung'])
     .order('created_at', { ascending: false })
     .limit(limit);
   return (data ?? []) as PersonalNotification[];
+}
+
+/** Current members of the team (except the viewer) for the @-autocomplete. */
+export async function getMentionMembers(teamId: string, viewerId: string): Promise<MentionMember[]> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from('team_members')
+    .select('user_id, role, profiles(full_name, avatar_url)')
+    .eq('team_id', teamId)
+    .neq('user_id', viewerId);
+  return (data ?? [])
+    .map((row) => {
+      const r = row as unknown as { user_id: string; role: 'member' | 'team_admin'; profiles: { full_name: string | null; avatar_url: string | null } | null };
+      return { id: r.user_id, name: r.profiles?.full_name?.trim() ?? '', avatarUrl: r.profiles?.avatar_url ?? null, role: r.role };
+    })
+    .filter((m) => m.name)
+    .sort((a, b) => a.name.localeCompare(b.name, 'de'));
+}
+
+/** Resolved mentions for a batch of messages (one query). */
+export async function getMessageMentions(messageIds: string[]): Promise<Record<string, MessageMention[]>> {
+  const out: Record<string, MessageMention[]> = {};
+  if (messageIds.length === 0) return out;
+  const supabase = await createClient();
+  const { data } = await supabase.from('message_mentions').select('message_id, mentioned_user_id, mention_text').in('message_id', messageIds);
+  for (const r of data ?? []) (out[r.message_id] ??= []).push({ userId: r.mentioned_user_id, text: r.mention_text });
+  return out;
 }

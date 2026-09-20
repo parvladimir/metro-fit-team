@@ -22,6 +22,8 @@ import { EventSocial } from '@/components/chat/EventSocial';
 import { addReplyOnce, applyReaction, EMPTY_SOCIAL, type EventSocial as Social } from '@/lib/event-social';
 import { toggleSupportAction, sendEventReplyAction, markNotificationsReadAction } from '@/app/(app)/team/chat/actions';
 import { refreshNotificationCount } from '@/lib/notification-store';
+import { MentionInput, type MentionInputHandle } from '@/components/chat/MentionInput';
+import { stillMentioned, type MentionMember, type MessageMention } from '@/lib/mentions';
 import { t } from '@/lib/i18n';
 import type { ChatMessage } from '@/lib/data/chat';
 
@@ -34,6 +36,8 @@ export function ChatRoom({
   previousReadAt,
   initialSocial,
   focusMessageId,
+  members,
+  initialMentions,
 }: {
   teamId: string;
   currentUserId: string;
@@ -41,11 +45,17 @@ export function ChatRoom({
   previousReadAt: string | null;
   initialSocial: Record<string, Social>;
   focusMessageId: string | null;
+  members: MentionMember[];
+  initialMentions: Record<string, MessageMention[]>;
 }) {
   const [messages, setMessages] = useState(initialMessages);
   const [social, setSocial] = useState(initialSocial);
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [mentionsMap, setMentionsMap] = useState(initialMentions);
+  const [draft, setDraft] = useState('');
+  const [picked, setPicked] = useState<MentionMember[]>([]);
+  const mentionsOf = (id: string) => mentionsMap[id] ?? [];
   const updateSocial = (id: string, fn: (s: Social) => Social) =>
     setSocial((prev) => ({ ...prev, [id]: fn(prev[id] ?? EMPTY_SOCIAL) }));
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
@@ -59,7 +69,7 @@ export function ChatRoom({
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const activeTeamRef = useRef(teamId);
-  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const composerRef = useRef<MentionInputHandle>(null);
 
   function autoGrow(el: HTMLTextAreaElement) {
     el.style.height = 'auto';
@@ -78,6 +88,7 @@ export function ChatRoom({
     const start = el.selectionStart ?? el.value.length;
     const end = el.selectionEnd ?? el.value.length;
     el.setRangeText(md, start, end, 'end');
+    setDraft(el.value);
     autoGrow(el);
   }
 
@@ -172,6 +183,20 @@ export function ChatRoom({
             setMessages((prev) => prev.map((m) => (m.id === row.id ? { ...m, content: row.content, edited_at: row.edited_at, metadata: row.metadata } : m)));
           }
         })
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'message_mentions', filter: `team_id=eq.${teamId}` }, (payload) => {
+          const r = payload.new as { message_id: string; mentioned_user_id: string; mention_text: string };
+          setMentionsMap((prev) => {
+            const cur = prev[r.message_id] ?? [];
+            if (cur.some((x) => x.userId === r.mentioned_user_id)) return prev;
+            return { ...prev, [r.message_id]: [...cur, { userId: r.mentioned_user_id, text: r.mention_text }] };
+          });
+        })
+        .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'message_mentions', filter: `team_id=eq.${teamId}` }, (payload) => {
+          const r = payload.old as { message_id?: string; mentioned_user_id?: string };
+          if (r.message_id && r.mentioned_user_id) {
+            setMentionsMap((prev) => ({ ...prev, [r.message_id!]: (prev[r.message_id!] ?? []).filter((x) => x.userId !== r.mentioned_user_id) }));
+          }
+        })
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'message_reactions', filter: `team_id=eq.${teamId}` }, (payload) => {
           const r = payload.new as { message_id: string; user_id: string };
           updateSocial(r.message_id, (cur) => ({ ...cur, reactors: applyReaction(cur.reactors, r.user_id, true) }));
@@ -211,9 +236,10 @@ export function ChatRoom({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusMessageId]);
 
-  async function saveEdit(id: string, text: string): Promise<string | null> {
-    const res = await editMessageAction(id, text);
+  async function saveEdit(id: string, text: string, mentionIds: string[]): Promise<string | null> {
+    const res = await editMessageAction(id, text, mentionIds);
     if (!res.ok) return res.error;
+    setMentionsMap((prev) => ({ ...prev, [id]: res.mentions }));
     setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, content: res.content, edited_at: res.edited_at } : m)));
     setEditingId(null);
     return null;
@@ -236,8 +262,8 @@ export function ChatRoom({
       .catch(() => updateSocial(eventId, (cur) => ({ ...cur, reactors: applyReaction(cur.reactors, currentUserId, had) })));
   }
 
-  async function sendReply(eventId: string, text: string): Promise<string | null> {
-    const res = await sendEventReplyAction(eventId, text);
+  async function sendReply(eventId: string, text: string, mentionIds: string[]): Promise<string | null> {
+    const res = await sendEventReplyAction(eventId, text, mentionIds);
     if (!res.ok) return res.error;
     updateSocial(eventId, (cur) => ({ ...cur, replies: addReplyOnce(cur.replies, res.reply) }));
     return null;
@@ -305,7 +331,7 @@ export function ChatRoom({
     }
   }
 
-  async function sendImage(caption: string) {
+  async function sendImage(caption: string, mentionUserIds: string[] = []) {
     if (!attachment) return;
     setSending(true);
     const { prepared } = attachment;
@@ -324,6 +350,7 @@ export function ChatRoom({
       const res = await sendImageMessageAction({
         teamId: activeTeamRef.current,
         messageId,
+        mentionUserIds,
         path,
         thumbPath,
         mime: prepared.mime,
@@ -369,7 +396,8 @@ export function ChatRoom({
                     currentUserId={currentUserId}
                     ownerName={m.user_id === currentUserId ? 'dich selbst' : m.authorName.split(' ')[0] || m.authorName}
                     onToggleSupport={() => toggleSupport(m.id)}
-                    onSendReply={(text) => sendReply(m.id, text)}
+                    members={members}
+                    onSendReply={(text, ids) => sendReply(m.id, text, ids)}
                   />
                 </div>
               );
@@ -377,7 +405,11 @@ export function ChatRoom({
 
             if (isCreatorCardMessage(m, m.creatorName ? { displayName: m.creatorName } : null)) {
               return (
-                <div key={m.id} className="flex flex-col">
+                <div
+                  key={m.id}
+                  id={`msg-${m.id}`}
+                  className={`flex flex-col rounded-2xl transition-shadow duration-500 ${highlightId === m.id ? 'shadow-[0_0_0_2px_rgba(0,215,245,0.55)]' : ''}`}
+                >
                   {m.id === firstUnreadId && (
                     <div className="mb-3 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-brand">
                       <span className="h-px flex-1 bg-brand/25" />
@@ -392,10 +424,12 @@ export function ChatRoom({
                     time={new Date(m.created_at).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}
                     onReply={() => setReplyTo(m)}
                     edited={!!m.edited_at}
+                    mentions={mentionsOf(m.id)}
+                    currentUserId={currentUserId}
                     menu={mine ? <MessageActions onEdit={() => setEditingId(m.id)} onDelete={() => removeMessage(m.id)} /> : undefined}
                     editor={
                       editingId === m.id ? (
-                        <MessageEditor initial={m.content} onSave={(text) => saveEdit(m.id, text)} onCancel={() => setEditingId(null)} />
+                        <MessageEditor initial={m.content} members={members} initialMentions={mentionsOf(m.id)} onSave={(text, ids) => saveEdit(m.id, text, ids)} onCancel={() => setEditingId(null)} />
                       ) : undefined
                     }
                   >
@@ -414,7 +448,11 @@ export function ChatRoom({
             }
 
             return (
-              <div key={m.id}>
+              <div
+                key={m.id}
+                id={`msg-${m.id}`}
+                className={`rounded-2xl transition-shadow duration-500 ${highlightId === m.id ? 'shadow-[0_0_0_2px_rgba(0,215,245,0.55)]' : ''}`}
+              >
                 {m.id === firstUnreadId && (
                   <div className="mb-3 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-brand">
                     <span className="h-px flex-1 bg-brand/25" />
@@ -440,7 +478,7 @@ export function ChatRoom({
                     )}
                     {editingId === m.id ? (
                       <div className="mt-0.5 w-[78vw] max-w-full rounded-2xl bg-neutral-100 p-3">
-                        <MessageEditor initial={m.content} onSave={(text) => saveEdit(m.id, text)} onCancel={() => setEditingId(null)} />
+                        <MessageEditor initial={m.content} members={members} initialMentions={mentionsOf(m.id)} onSave={(text, ids) => saveEdit(m.id, text, ids)} onCancel={() => setEditingId(null)} />
                       </div>
                     ) : (
                       (m.message_type !== 'image' || m.content) && (
@@ -457,7 +495,7 @@ export function ChatRoom({
                               mine ? 'bg-brand text-[#00232A]' : 'bg-neutral-100 text-neutral-900'
                             }`}
                           >
-                            <ChatMarkdown text={m.content} tone={mine ? 'bubble-own' : 'bubble'} />
+                            <ChatMarkdown text={m.content} tone={mine ? 'bubble-own' : 'bubble'} mentions={mentionsOf(m.id)} currentUserId={currentUserId} />
                           </div>
                         </div>
                       )
@@ -479,16 +517,17 @@ export function ChatRoom({
         ref={formRef}
         action={async (formData) => {
           setSendError(null);
+          const ids = stillMentioned(draft, picked).map((m) => m.id);
           if (attachment) {
-            await sendImage(String(formData.get('content') || ''));
-            formRef.current?.reset();
-            if (composerRef.current) composerRef.current.style.height = 'auto';
-            setReplyTo(null);
-            return;
+            await sendImage(String(formData.get('content') || ''), ids);
+          } else {
+            formData.set('mentions', JSON.stringify(ids));
+            await sendMessageAction(formData);
           }
-          await sendMessageAction(formData);
           formRef.current?.reset();
-          if (composerRef.current) composerRef.current.style.height = 'auto';
+          setDraft('');
+          setPicked([]);
+          if (composerRef.current?.el) composerRef.current.el.style.height = 'auto';
           setReplyTo(null);
         }}
         className="flex shrink-0 flex-col gap-2 border-t border-neutral-200 bg-neutral-100 px-3 py-3"
@@ -541,8 +580,15 @@ export function ChatRoom({
           >
             <ImagePlus size={20} strokeWidth={1.9} />
           </button>
-          <textarea
+          <MentionInput
             ref={composerRef}
+            value={draft}
+            onValueChange={(v) => {
+              setDraft(v);
+              requestAnimationFrame(() => composerRef.current?.el && autoGrow(composerRef.current.el));
+            }}
+            members={members}
+            onPick={(m) => setPicked((p) => (p.some((x) => x.id === m.id) ? p : [...p, m]))}
             name="content"
             rows={1}
             maxLength={2000}

@@ -7,6 +7,7 @@ export interface EventReply {
   created_at: string;
   authorName: string;
   authorAvatar: string | null;
+  mentions?: { userId: string; text: string }[];
 }
 
 export interface EventSocial {
@@ -41,10 +42,11 @@ export function replyText(actorName: string, reply: string): string {
 }
 
 export function inAppNotificationText(
-  kind: 'reaction' | 'reply' | null,
+  kind: 'reaction' | 'reply' | 'mention' | null,
   params: { actor_name?: string; event_title?: string | null; preview?: string }
 ): string {
   const who = firstName(params.actor_name ?? '');
+  if (kind === 'mention') return `${who} hat dich im Team-Chat erwähnt.`;
   return kind === 'reply' ? `${who} hat auf dein Training geantwortet.` : `${who} unterstützt dein Training.`;
 }
 
