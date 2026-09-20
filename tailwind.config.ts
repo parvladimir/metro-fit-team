@@ -35,7 +35,8 @@ const config: Config = {
           150: '#152A2E',
           200: '#1E383C',
           300: '#2C4A4F',
-          400: '#5B7B7F',
+          // 400 lifted from #5B7B7F (3.6:1 on cards) to 5.2:1 so small labels stay readable
+          400: '#73989C',
           500: '#8AA9AC',
           600: '#AEC7C9',
           700: '#CFE1E2',
@@ -45,6 +46,20 @@ const config: Config = {
         surface: {
           DEFAULT: '#00191D',
           light: '#0E2226',
+          // Card depth levels: 1 = quiet/secondary, 2 = primary card, 3 = raised (chips, buttons)
+          1: 'var(--surface-1)',
+          2: 'var(--surface-2)',
+          3: 'var(--surface-3)',
+        },
+        // Semantic accents: cyan is the identity, the rest only carry meaning.
+        // Channels are RGB triplets so opacity modifiers work (bg-accent-success/15).
+        accent: {
+          primary: 'rgb(var(--accent-primary-rgb) / <alpha-value>)',
+          success: 'rgb(var(--accent-success-rgb) / <alpha-value>)',
+          achievement: 'rgb(var(--accent-achievement-rgb) / <alpha-value>)',
+          challenge: 'rgb(var(--accent-challenge-rgb) / <alpha-value>)',
+          info: 'rgb(var(--accent-info-rgb) / <alpha-value>)',
+          warning: 'rgb(var(--accent-warning-rgb) / <alpha-value>)',
         },
       },
       borderRadius: {

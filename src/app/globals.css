@@ -4,6 +4,32 @@
 
 :root {
   color-scheme: dark;
+
+  /* --- Semantic accent palette (RGB channels; see tailwind `accent-*`) ---
+     primary   cyan     identity, main actions, active state
+     success   green    completed goals / positive progress
+     achievement gold   medals, points
+     challenge violet   challenges
+     info      blue     metrics, team, secondary info
+     warning   orange   attention */
+  --accent-primary-rgb: 0 215 245;
+  --accent-success-rgb: 53 208 127;
+  --accent-achievement-rgb: 243 185 78;
+  --accent-challenge-rgb: 139 124 255;
+  --accent-info-rgb: 78 168 255;
+  --accent-warning-rgb: 255 159 67;
+
+  /* --- Surface levels (deep navy → raised) --- */
+  --surface-1: #0a1d22;
+  --surface-2: #0e2226;
+  --surface-3: #152a2e;
+
+  /* --- Text hierarchy --- */
+  --text-primary: #f5fafa;
+  --text-secondary: #aec7c9;
+  --text-muted: #73989c;
+
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 html,
@@ -33,9 +59,51 @@ body {
 }
 
 @layer components {
+  /* Primary card: surface-2 with a whisper of gradient, a hairline border and
+     an inner top highlight for depth (no large shadows). */
   .card {
-    @apply rounded-3xl bg-neutral-100 p-5 border border-white/5;
-    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 12px 24px -16px rgba(0, 0, 0, 0.5);
+    @apply rounded-3xl p-5 border border-white/[0.06];
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.022) 0%, rgba(255, 255, 255, 0) 42%), var(--surface-2);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 10px 22px -16px rgba(0, 0, 0, 0.55);
+  }
+
+  /* Secondary / lower-emphasis card. */
+  .card-quiet {
+    @apply rounded-3xl p-5 border border-white/[0.04];
+    background: var(--surface-1);
+  }
+
+  /* Accent card: add one of .accent-team / .accent-challenge / .accent-gold /
+     .accent-success / .accent-primary. Border + very soft glow only — the
+     card itself stays dark. */
+  .card-accent {
+    border-color: rgb(var(--card-rgb) / 0.3);
+    background:
+      radial-gradient(120% 90% at 0% 0%, rgb(var(--card-rgb) / 0.09) 0%, rgb(var(--card-rgb) / 0) 60%),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.02) 0%, rgba(255, 255, 255, 0) 42%),
+      var(--surface-2);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 0 26px -16px rgb(var(--card-rgb) / 0.7);
+  }
+  .accent-team { --card-rgb: var(--accent-info-rgb); }
+  .accent-challenge { --card-rgb: var(--accent-challenge-rgb); }
+  .accent-gold { --card-rgb: var(--accent-achievement-rgb); }
+  .accent-success { --card-rgb: var(--accent-success-rgb); }
+  .accent-primary { --card-rgb: var(--accent-primary-rgb); }
+
+  /* Round icon container tinted with one accent (set via .accent-* on it or a parent). */
+  .icon-chip {
+    @apply flex shrink-0 items-center justify-center rounded-full;
+    color: rgb(var(--card-rgb, var(--accent-primary-rgb)));
+    background: rgb(var(--card-rgb, var(--accent-primary-rgb)) / 0.14);
+    border: 1px solid rgb(var(--card-rgb, var(--accent-primary-rgb)) / 0.3);
+  }
+
+  /* Pressable surfaces: 150-300ms, respects reduced motion via the global rule. */
+  .press {
+    transition: transform 180ms var(--ease-out), background-color 180ms var(--ease-out), border-color 180ms var(--ease-out);
+  }
+  .press:active {
+    transform: scale(0.98);
   }
 
   .card-flat {
@@ -62,12 +130,25 @@ body {
   }
 
   .btn-primary {
-    @apply btn bg-brand text-[#00232A] active:bg-brand-600;
-    box-shadow: 0 8px 20px -6px rgba(0, 215, 245, 0.35);
+    @apply btn text-[#00232A];
+    background: linear-gradient(180deg, #2fe3fb 0%, #00d7f5 55%, #00c4e2 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), 0 8px 20px -6px rgba(0, 215, 245, 0.4);
+    transition: transform 160ms var(--ease-out), box-shadow 160ms var(--ease-out), filter 160ms var(--ease-out);
+  }
+  .btn-primary:active {
+    filter: brightness(0.94);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2), 0 4px 12px -6px rgba(0, 215, 245, 0.35);
   }
 
   .btn-secondary {
-    @apply btn bg-neutral-150 text-neutral-900 active:bg-neutral-200;
+    @apply btn text-neutral-900 border border-white/[0.1];
+    background: var(--surface-3);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    transition: transform 160ms var(--ease-out), background-color 160ms var(--ease-out), border-color 160ms var(--ease-out);
+  }
+  .btn-secondary:active {
+    background: var(--surface-2);
+    border-color: rgb(var(--accent-info-rgb) / 0.4);
   }
 
   .btn-ghost {
