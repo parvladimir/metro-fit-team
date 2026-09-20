@@ -2,7 +2,8 @@ import 'server-only';
 import webpush from 'web-push';
 import { publicEnv, getServerEnv } from '@/lib/env';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { eventDeepLink, reactionText, replyText } from '@/lib/event-social';
+import { eventDeepLink, reactionText, replyText, firstName } from '@/lib/event-social';
+import { stripMarkdown } from '@/lib/chat-format';
 
 let vapidConfigured = false;
 
@@ -61,7 +62,7 @@ export async function notifyEventOwner(params: {
         .from('notifications')
         .select('id', { count: 'exact', head: true })
         .eq('user_id', params.ownerId)
-        .eq('category', 'reaktion_antwort')
+        .in('category', ['reaktion_antwort', 'erwaehnung'])
         .is('read_at', null),
     ]);
     if (pref && pref.reaktionen_antworten === false) return;
@@ -92,7 +93,13 @@ export async function notifyEventOwner(params: {
  * other error is logged and ignored) so one bad recipient can never break
  * message sending itself.
  */
-export async function notifyTeamOfNewChatMessage(params: { teamId: string; senderId: string; content: string }): Promise<void> {
+export async function notifyTeamOfNewChatMessage(params: {
+  teamId: string;
+  senderId: string;
+  content: string;
+  /** Users who get a dedicated mention push instead (never two pushes per message). */
+  excludeUserIds?: string[];
+}): Promise<void> {
   if (!isPushConfigured()) return;
 
   try {
@@ -106,7 +113,9 @@ export async function notifyTeamOfNewChatMessage(params: { teamId: string; sende
     ]);
 
     if (!members || members.length === 0) return;
-    const recipientIds = members.map((m) => m.user_id);
+    const excluded = new Set(params.excludeUserIds ?? []);
+    const recipientIds = members.map((m) => m.user_id).filter((id) => !excluded.has(id));
+    if (recipientIds.length === 0) return;
 
     const { data: prefs } = await admin
       .from('notification_preferences')
@@ -134,5 +143,65 @@ export async function notifyTeamOfNewChatMessage(params: { teamId: string; sende
   } catch {
     // Push is an enhancement layered on top of the message that has already
     // been saved — never let a failure here surface to the sender.
+  }
+}
+
+/**
+ * One dedicated push per mentioned user ("X hat dich im Team-Chat erwähnt").
+ * Returns the ids that should NOT additionally get the normal chat push
+ * (everyone whose "Erwähnungen" preference is on) so a mention never produces
+ * two notifications. Never throws.
+ */
+export async function notifyMentionedUsers(params: {
+  authorId: string;
+  /** the message that contains the mention */
+  messageId: string;
+  /** where the notification opens (the event for thread replies) */
+  targetMessageId: string;
+  userIds: string[];
+  content: string;
+}): Promise<string[]> {
+  const ids = [...new Set(params.userIds)].filter((id) => id !== params.authorId);
+  if (ids.length === 0) return [];
+  try {
+    const admin = createAdminClient();
+    const { data: prefs } = await admin.from('notification_preferences').select('user_id, erwaehnungen').in('user_id', ids);
+    const off = new Set((prefs ?? []).filter((p) => p.erwaehnungen === false).map((p) => p.user_id as string));
+    const handled = ids.filter((id) => !off.has(id));
+    if (handled.length === 0 || !isPushConfigured()) return handled;
+
+    ensureVapidConfigured();
+    const [{ data: author }, { data: subs }] = await Promise.all([
+      admin.from('profiles').select('full_name').eq('id', params.authorId).single(),
+      admin.from('push_subscriptions').select('id, user_id, endpoint, p256dh, auth').in('user_id', handled),
+    ]);
+    const who = firstName(author?.full_name || 'Jemand');
+    const preview = stripMarkdown(params.content);
+    const body = preview.length > 110 ? `${preview.slice(0, 109)}…` : preview;
+
+    for (const userId of handled) {
+      const mine = (subs ?? []).filter((s) => s.user_id === userId);
+      if (mine.length === 0) continue;
+      const { count } = await admin
+        .from('notifications')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', userId)
+        .in('category', ['reaktion_antwort', 'erwaehnung'])
+        .is('read_at', null);
+      await deliver(
+        admin,
+        mine as PushSub[],
+        JSON.stringify({
+          title: `${who} hat dich im Team-Chat erwähnt`,
+          body,
+          url: eventDeepLink(params.targetMessageId),
+          tag: `mention-${params.messageId}`,
+          badgeCount: count ?? 1,
+        })
+      );
+    }
+    return handled;
+  } catch {
+    return [];
   }
 }

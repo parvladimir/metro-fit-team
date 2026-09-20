@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Crown, ShieldCheck, Sparkles } from 'lucide-react';
 import { Avatar } from '@/components/ui/Avatar';
 import { ChatMarkdown } from '@/components/chat/ChatMarkdown';
+import type { MessageMention } from '@/lib/mentions';
 
 const CREATOR_HINT = 'Ersteller der METRO Fit Team App';
 
@@ -20,6 +21,8 @@ export function CreatorMessageCard({
   menu,
   editor,
   edited = false,
+  mentions = [],
+  currentUserId = null,
 }: {
   name: string;
   avatar: string | null;
@@ -33,6 +36,8 @@ export function CreatorMessageCard({
   /** When set, replaces the rendered text with the inline editor. */
   editor?: React.ReactNode;
   edited?: boolean;
+  mentions?: MessageMention[];
+  currentUserId?: string | null;
 }) {
   const [hint, setHint] = useState(false);
 
@@ -78,7 +83,7 @@ export function CreatorMessageCard({
           onClick={onReply}
           className="mt-3 cursor-pointer font-creator text-[15px] leading-[1.6] text-neutral-900"
         >
-          <ChatMarkdown text={content} />
+          <ChatMarkdown text={content} mentions={mentions} currentUserId={currentUserId} />
         </div>
       )}
 

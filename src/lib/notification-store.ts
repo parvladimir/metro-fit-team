@@ -29,7 +29,7 @@ export async function refreshNotificationCount(userId: string | null): Promise<v
     .from('notifications')
     .select('id', { count: 'exact', head: true })
     .eq('user_id', userId)
-    .eq('category', 'reaktion_antwort')
+    .in('category', ['reaktion_antwort', 'erwaehnung'])
     .is('read_at', null);
   if (error) return;
   count = c ?? 0;

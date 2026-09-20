@@ -6,7 +6,7 @@ import { ConfirmSubmitButton } from '@/components/ui/ConfirmSubmitButton';
 import { t } from '@/lib/i18n';
 import type { NotificationPreferences } from '@/types/database';
 
-const CATEGORIES = ['chat_nachrichten', 'reaktionen_antworten', 'trainingserinnerung', 'wochenziel', 'messungserinnerung', 'herausforderung', 'team_aktivitaet', 'wochenzusammenfassung'] as const;
+const CATEGORIES = ['chat_nachrichten', 'reaktionen_antworten', 'erwaehnungen', 'trainingserinnerung', 'wochenziel', 'messungserinnerung', 'herausforderung', 'team_aktivitaet', 'wochenzusammenfassung'] as const;
 
 export default async function EinstellungenPage() {
   const user = await requireAuthUser();
