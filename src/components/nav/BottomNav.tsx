@@ -88,12 +88,14 @@ export function BottomNav({ teamId, initialUnreadCount }: { teamId: string | nul
               key={href}
               href={href}
               className={clsx(
-                'flex min-h-[52px] flex-1 flex-col items-center justify-center gap-0.5 rounded-full py-2 text-[11px] font-semibold transition-colors duration-200',
-                active ? 'bg-brand-50 text-brand' : 'text-[#6F8E95]'
+                'flex min-h-[52px] flex-1 flex-col items-center justify-center gap-0.5 rounded-full py-2 text-[11px] font-semibold transition-all duration-200 ease-out',
+                active
+                  ? 'bg-gradient-to-b from-brand/[0.16] to-brand/[0.06] text-brand shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_0_0_1px_rgba(0,215,245,0.18)]'
+                  : 'text-[#6F8E95]'
               )}
             >
               <span className="relative">
-                <Icon size={23} strokeWidth={active ? 2.4 : 1.9} className={active ? undefined : 'text-[#5C8790]'} />
+                <Icon size={23} strokeWidth={active ? 2.4 : 1.9} className={`transition-all duration-200 ${active ? 'scale-105 text-[#5CF0FF]' : 'text-[#5C8790]'}`} />
                 {href === '/team' && personalCount > 0 && (
                   <span
                     className="absolute -left-1 -top-1 h-2.5 w-2.5 rounded-full bg-brand ring-2 ring-neutral-100"

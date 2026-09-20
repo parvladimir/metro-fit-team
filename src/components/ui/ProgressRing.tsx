@@ -70,20 +70,30 @@ export function ProgressRing({
     return () => cancelAnimationFrame(frame);
   }, [target]);
 
+  const done = target >= 100;
   const radius = (size - strokeWidth) / 2;
   const circumference = 2 * Math.PI * radius;
   const offset = circumference - (displayPercent / 100) * circumference;
 
   return (
     <div className="relative flex shrink-0 items-center justify-center" style={{ width: size, height: size }}>
+      {/* soft inner glow so the ring feels dimensional, not flat */}
+      <div
+        aria-hidden
+        className="absolute inset-3 rounded-full"
+        style={{
+          background: `radial-gradient(closest-side, ${done ? 'rgba(53,208,127,0.10)' : 'rgba(0,215,245,0.08)'} 0%, rgba(0,0,0,0) 100%)`,
+        }}
+      />
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="-rotate-90">
         <defs>
+          {/* cyan → blue while in progress; eases to success green at 100% */}
           <linearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="#5CF0FF" />
-            <stop offset="100%" stopColor="#00D7F5" />
+            <stop offset="0%" stopColor={done ? '#6BE9A8' : '#5CF0FF'} />
+            <stop offset="100%" stopColor={done ? '#35D07F' : '#19BDF7'} />
           </linearGradient>
         </defs>
-        <circle cx={size / 2} cy={size / 2} r={radius} stroke="#1E383C" strokeWidth={strokeWidth} fill="none" />
+        <circle cx={size / 2} cy={size / 2} r={radius} stroke="#1E383C" strokeOpacity={0.85} strokeWidth={strokeWidth} fill="none" />
         <circle
           cx={size / 2}
           cy={size / 2}
@@ -94,12 +104,15 @@ export function ProgressRing({
           strokeLinecap="round"
           strokeDasharray={circumference}
           strokeDashoffset={offset}
-          style={{ filter: 'drop-shadow(0 0 6px rgba(0, 215, 245, 0.45))' }}
+          style={{
+            filter: `drop-shadow(0 0 5px ${done ? 'rgba(53, 208, 127, 0.4)' : 'rgba(0, 215, 245, 0.4)'})`,
+            transition: 'filter 300ms ease-out',
+          }}
         />
       </svg>
       <div className="absolute flex flex-col items-center px-4 text-center">
-        <span className="text-[26px] font-extrabold leading-none tracking-tight text-neutral-900">{displayPercent}%</span>
-        {label && <span className="mt-1.5 text-xs font-medium text-neutral-400">{label}</span>}
+        <span className="text-[30px] font-extrabold leading-none tracking-tight text-neutral-900 tabular-nums">{displayPercent}%</span>
+        {label && <span className="mt-2 text-xs font-medium text-neutral-600">{label}</span>}
       </div>
     </div>
   );

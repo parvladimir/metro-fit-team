@@ -15,7 +15,7 @@ export default async function HerausforderungenPage() {
   if (!membership) {
     return (
       <div className="screen-padding pb-4">
-        <EmptyState title={t('team.noTeam.title')} icon={Trophy} />
+        <EmptyState title={t('team.noTeam.title')} icon={Trophy} accent="challenge" />
       </div>
     );
   }
@@ -35,7 +35,7 @@ export default async function HerausforderungenPage() {
       )}
 
       {challenges.length === 0 ? (
-        <EmptyState title={t('challenge.empty.title')} actionLabel={isAdmin ? t('challenge.empty.action') : undefined} actionHref="/team/herausforderungen/neu" icon={Trophy} />
+        <EmptyState title={t('challenge.empty.title')} actionLabel={isAdmin ? t('challenge.empty.action') : undefined} actionHref="/team/herausforderungen/neu" icon={Trophy} accent="challenge" />
       ) : (
         <div className="flex flex-col gap-3">
           {challenges.map((c) => (

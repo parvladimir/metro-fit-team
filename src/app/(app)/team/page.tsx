@@ -32,7 +32,7 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
     return (
       <div className="screen-padding pb-4">
         <h1 className="mb-4 text-page-title text-neutral-900">{t('team.title')}</h1>
-        <EmptyState title={t('team.noTeam.title')} icon={Users} />
+        <EmptyState title={t('team.noTeam.title')} icon={Users} accent="team" />
         <p className="mt-3 text-center text-xs text-neutral-400">{t('team.noTeam.description')}</p>
       </div>
     );
