@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useFormStatus } from 'react-dom';
 import { CheckCircle2, Dumbbell, ImagePlus, Loader2, MessageCircle, Play, Target, Trophy, X } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
-import { sendMessageAction, sendImageMessageAction, markChatReadAction } from '@/app/(app)/team/chat/actions';
+import { sendMessageAction, sendImageMessageAction, markChatReadAction, loadOlderMessagesAction } from '@/app/(app)/team/chat/actions';
 import { ChatImage } from '@/components/chat/ChatImage';
 import { formatSystemEvent } from '@/lib/chat-events';
 import { ImageError, prepareChatImage, type PreparedImage } from '@/lib/image-compress';
@@ -38,6 +38,7 @@ export function ChatRoom({
   focusMessageId,
   members,
   initialMentions,
+  initialHasMore,
 }: {
   teamId: string;
   currentUserId: string;
@@ -47,8 +48,12 @@ export function ChatRoom({
   focusMessageId: string | null;
   members: MentionMember[];
   initialMentions: Record<string, MessageMention[]>;
+  initialHasMore: boolean;
 }) {
   const [messages, setMessages] = useState(initialMessages);
+  const [hasMore, setHasMore] = useState(initialHasMore);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const restoreScrollRef = useRef<number | null>(null);
   const [social, setSocial] = useState(initialSocial);
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -161,15 +166,21 @@ export function ChatRoom({
             }
             const { data: profile } = await supabase.from('profiles').select('full_name, avatar_url').eq('id', row.user_id).maybeSingle();
             const creators = await fetchCreators(supabase, [row.user_id]);
-            setMessages((prev) => [
-              ...prev,
-              {
-                ...row,
-                authorName: resolveAuthorName(profile),
-                authorAvatar: profile?.avatar_url ?? null,
-                creatorName: creators.get(row.user_id)?.displayName ?? null,
-              },
-            ]);
+            // The sender already added the persisted row from the server response —
+            // the message id is the source of truth, so never add it twice.
+            setMessages((prev) =>
+              prev.some((m) => m.id === row.id)
+                ? prev
+                : [
+                    ...prev,
+                    {
+                      ...row,
+                      authorName: resolveAuthorName(profile),
+                      authorAvatar: profile?.avatar_url ?? null,
+                      creatorName: creators.get(row.user_id)?.displayName ?? null,
+                    },
+                  ]
+            );
           }
         )
         .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: `team_id=eq.${teamId}` }, (payload) => {
@@ -235,6 +246,39 @@ export function ChatRoom({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusMessageId]);
+
+  /** Adds a message exactly as the server stored it (id = source of truth). */
+  function addPersisted(message: ChatMessage, mentions: MessageMention[]) {
+    setMessages((prev) => (prev.some((m) => m.id === message.id) ? prev : [...prev, message]));
+    if (mentions.length) setMentionsMap((prev) => ({ ...prev, [message.id]: mentions }));
+  }
+
+  async function loadOlder() {
+    const oldest = messages[0];
+    if (!oldest || loadingOlder) return;
+    setLoadingOlder(true);
+    try {
+      const res = await loadOlderMessagesAction(teamId, oldest.created_at);
+      restoreScrollRef.current = listRef.current ? listRef.current.scrollHeight - listRef.current.scrollTop : null;
+      setMessages((prev) => {
+        const have = new Set(prev.map((m) => m.id));
+        return [...res.messages.filter((m) => !have.has(m.id)), ...prev];
+      });
+      setMentionsMap((prev) => ({ ...res.mentions, ...prev }));
+      setSocial((prev) => ({ ...res.social, ...prev }));
+      setHasMore(res.hasMore);
+    } finally {
+      setLoadingOlder(false);
+    }
+  }
+
+  // keep the reader's place when older messages are prepended
+  useEffect(() => {
+    if (restoreScrollRef.current !== null && listRef.current) {
+      listRef.current.scrollTop = listRef.current.scrollHeight - restoreScrollRef.current;
+      restoreScrollRef.current = null;
+    }
+  }, [messages]);
 
   async function saveEdit(id: string, text: string, mentionIds: string[]): Promise<string | null> {
     const res = await editMessageAction(id, text, mentionIds);
@@ -331,8 +375,8 @@ export function ChatRoom({
     }
   }
 
-  async function sendImage(caption: string, mentionUserIds: string[] = []) {
-    if (!attachment) return;
+  async function sendImage(caption: string, mentionUserIds: string[] = []): Promise<boolean> {
+    if (!attachment) return false;
     setSending(true);
     const { prepared } = attachment;
     const storage = createClient().storage.from('chat-media');
@@ -360,11 +404,13 @@ export function ChatRoom({
       });
       if (!res.ok) throw new Error(res.error);
       clearAttachment();
+      return true;
     } catch {
       // Nothing was inserted (or the server removed the files); best-effort
       // cleanup of anything that did reach storage, and no broken message.
       await storage.remove([path, thumbPath]).catch(() => undefined);
       setSendError('Foto konnte nicht gesendet werden. Bitte versuche es erneut.');
+      return false;
     } finally {
       setSending(false);
     }
@@ -373,6 +419,16 @@ export function ChatRoom({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div ref={listRef} onScroll={handleScroll} className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 pb-3 pt-4">
+        {hasMore && messages.length > 0 && (
+          <button
+            type="button"
+            onClick={loadOlder}
+            disabled={loadingOlder}
+            className="btn-ghost mx-auto shrink-0 !min-h-[36px] border !border-white/[0.08] bg-surface-3 px-4 text-xs"
+          >
+            {loadingOlder ? 'Lädt…' : 'Ältere Nachrichten laden'}
+          </button>
+        )}
         {messages.length === 0 ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-2 text-center text-neutral-400">
             <MessageCircle size={30} strokeWidth={1.6} />
@@ -520,12 +576,27 @@ export function ChatRoom({
         action={async (formData) => {
           setSendError(null);
           const ids = stillMentioned(draft, picked).map((m) => m.id);
+          let sent: boolean;
           if (attachment) {
-            await sendImage(String(formData.get('content') || ''), ids);
+            sent = await sendImage(String(formData.get('content') || ''), ids);
           } else {
             formData.set('mentions', JSON.stringify(ids));
-            await sendMessageAction(formData);
+            try {
+              const res = await sendMessageAction(formData);
+              if (res.ok) {
+                addPersisted(res.message, res.mentions);
+                sent = true;
+              } else {
+                setSendError(res.error);
+                sent = false;
+              }
+            } catch {
+              setSendError('Nachricht konnte nicht gesendet werden.');
+              sent = false;
+            }
           }
+          // A failed send keeps the draft so the user can simply retry.
+          if (!sent) return;
           formRef.current?.reset();
           setDraft('');
           setPicked([]);

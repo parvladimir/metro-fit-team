@@ -939,4 +939,24 @@ describeIntegration('Row Level Security', () => {
       await admin.from('team_members').insert({ team_id: teamId, user_id: userB.id, role: 'member' });
     });
   });
+  it('58. a member\'s new message stays visible on reload even after 70+ older rows (newest-first window)', async () => {
+    const rows = Array.from({ length: 70 }, (_, i) => ({ team_id: teamId, user_id: userA.id, content: `alt ${i}`, created_at: new Date(Date.now() - (200 - i) * 60000).toISOString() }));
+    await admin.from('messages').insert(rows);
+    const sent = await userB.client.from('messages').insert({ team_id: teamId, user_id: userB.id, content: '@Ben Test Nachricht – bitte nach Reload noch sichtbar.' }).select('id').single();
+    expect(sent.error).toBeNull();
+    // same shape as getMessagesPage: newest first, limited, top-level, not deleted
+    const page = await userB.client
+      .from('messages')
+      .select('*, profiles(full_name, avatar_url)')
+      .eq('team_id', teamId)
+      .is('deleted_at', null)
+      .is('parent_message_id', null)
+      .order('created_at', { ascending: false })
+      .limit(60);
+    expect(page.error).toBeNull();
+    expect((page.data ?? []).map((m) => m.id)).toContain(sent.data!.id);
+    // the old ascending+limit query would have returned only the oldest rows
+    const old = await userB.client.from('messages').select('id').eq('team_id', teamId).order('created_at', { ascending: true }).limit(50);
+    expect((old.data ?? []).map((m) => m.id)).not.toContain(sent.data!.id);
+  });
 });

@@ -13,20 +13,40 @@ export interface ChatMessage extends Message {
   creatorName: string | null;
 }
 
-export async function getRecentMessages(teamId: string, limit = 50): Promise<ChatMessage[]> {
+export const CHAT_PAGE_SIZE = 60;
+
+/**
+ * One page of top-level chat messages, returned oldest → newest.
+ *
+ * IMPORTANT: the page must be the NEWEST `limit` messages (fetch descending,
+ * then reverse). An ascending query with `.limit()` returns the OLDEST rows, so
+ * once a team had more than `limit` messages every new message vanished after a
+ * reload while still appearing live through Realtime. `before` pages backwards.
+ */
+export async function getMessagesPage(
+  teamId: string,
+  opts: { before?: string | null; limit?: number } = {}
+): Promise<{ messages: ChatMessage[]; hasMore: boolean }> {
+  const limit = opts.limit ?? CHAT_PAGE_SIZE;
   const supabase = await createClient();
-  const { data } = await supabase
+  let query = supabase
     .from('messages')
     .select('*, profiles(full_name, avatar_url)')
     .eq('team_id', teamId)
     .is('deleted_at', null)
     .is('parent_message_id', null)
-    .order('created_at', { ascending: true })
-    .limit(limit);
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: false })
+    .limit(limit + 1);
+  if (opts.before) query = query.lt('created_at', opts.before);
+  const { data } = await query;
 
-  const creators = await fetchCreators(supabase, (data ?? []).map((r) => (r as { user_id: string }).user_id));
+  const rows = data ?? [];
+  const hasMore = rows.length > limit;
+  const page = rows.slice(0, limit).reverse();
 
-  return (data ?? []).map((row) => {
+  const creators = await fetchCreators(supabase, page.map((r) => (r as { user_id: string }).user_id));
+  const messages = page.map((row) => {
     const r = row as unknown as Message & { profiles: Pick<Profile, 'full_name' | 'avatar_url'> | null };
     return {
       ...r,
@@ -35,6 +55,11 @@ export async function getRecentMessages(teamId: string, limit = 50): Promise<Cha
       creatorName: creators.get(r.user_id)?.displayName ?? null,
     };
   });
+  return { messages, hasMore };
+}
+
+export async function getRecentMessages(teamId: string, limit = CHAT_PAGE_SIZE): Promise<ChatMessage[]> {
+  return (await getMessagesPage(teamId, { limit })).messages;
 }
 
 export async function getUnreadChatCount(teamId: string): Promise<number> {

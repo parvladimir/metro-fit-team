@@ -11,8 +11,27 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { cleanReply, isValidMessageId, type EventReply } from '@/lib/event-social';
 import { resolveAuthorName } from '@/lib/chat-identity';
 import { stripMarkdown } from '@/lib/chat-format';
+import { fetchCreators } from '@/lib/creator';
+import { getEventSocial, getMessageMentions, getMessagesPage, type ChatMessage } from '@/lib/data/chat';
+import type { EventSocial } from '@/lib/event-social';
+import type { Message } from '@/types/database';
 
-export async function sendMessageAction(formData: FormData) {
+export type SendMessageResult =
+  | { ok: true; message: ChatMessage; mentions: MessageMention[] }
+  | { ok: false; error: string };
+
+const SEND_FAILED = 'Nachricht konnte nicht gesendet werden.';
+
+/**
+ * Persists a chat message and returns the ROW THAT WAS ACTUALLY STORED. The UI
+ * only shows a message as sent after this succeeds, and uses the returned id as
+ * the source of truth (Realtime duplicates are matched on it).
+ *
+ * Order matters: the message insert is the only step that can fail the send.
+ * Mention relations, notifications and push are secondary — their failure is
+ * logged and swallowed and must never remove or "unsend" the message.
+ */
+export async function sendMessageAction(formData: FormData): Promise<SendMessageResult> {
   const user = await requireAuthUser();
   const supabase = await createClient();
 
@@ -20,33 +39,72 @@ export async function sendMessageAction(formData: FormData) {
   const content = String(formData.get('content') || '').replace(/\r\n?/g, '\n').trim();
   const replyToId = String(formData.get('replyToId') || '') || null;
 
-  if (!content) return;
+  if (!content) return { ok: false, error: 'Bitte eine Nachricht eingeben.' };
 
   const trimmedContent = content.slice(0, 2000);
-  const { data: created } = await supabase
+  const { data: created, error } = await supabase
     .from('messages')
     .insert({ team_id: teamId, user_id: user.id, content: trimmedContent, reply_to_id: replyToId })
-    .select('id')
+    .select('*, profiles(full_name, avatar_url)')
     .single();
+
+  if (error || !created) {
+    console.error('[chat] insert failed', error?.code, error?.message?.slice(0, 160));
+    return { ok: false, error: SEND_FAILED };
+  }
+
+  let mentions: MessageMention[] = [];
+  let added: string[] = [];
+  const mentionIds = parseMentionIds(formData.get('mentions'));
+  if (mentionIds.length) {
+    try {
+      const res = await syncMentions(supabase, { messageId: created.id, teamId, content: trimmedContent, requestedIds: mentionIds, authorId: user.id });
+      mentions = res.mentions;
+      added = res.added;
+    } catch (err) {
+      console.error('[chat] mention sync failed', err instanceof Error ? err.message.slice(0, 160) : 'unknown');
+    }
+  }
+
   revalidatePath('/team/chat');
 
-  const mentionIds = parseMentionIds(formData.get('mentions'));
-  const added = created && mentionIds.length
-    ? (await syncMentions(supabase, { messageId: created.id, teamId, content: trimmedContent, requestedIds: mentionIds, authorId: user.id })).added
-    : [];
-
-  // Best-effort push fan-out, kept running after the response is sent
-  // (Vercel's waitUntil) so it never adds latency to sending a message —
-  // and notifyTeamOfNewChatMessage itself swallows every failure, so a bad
-  // subscription or provider outage can never surface here either way.
+  // Best-effort push fan-out after the response (Vercel's waitUntil): never adds
+  // latency and every failure is swallowed inside the notifiers.
   waitUntil(
     (async () => {
-      const handled = created
-        ? await notifyMentionedUsers({ authorId: user.id, messageId: created.id, targetMessageId: created.id, userIds: added, content: trimmedContent })
-        : [];
+      const handled = await notifyMentionedUsers({ authorId: user.id, messageId: created.id, targetMessageId: created.id, userIds: added, content: trimmedContent });
       await notifyTeamOfNewChatMessage({ teamId, senderId: user.id, content: stripMarkdown(trimmedContent), excludeUserIds: handled });
-    })()
+    })().catch(() => undefined)
   );
+
+  const profile = (created as unknown as { profiles: { full_name: string | null; avatar_url: string | null } | null }).profiles;
+  const creators = await fetchCreators(supabase, [user.id]).catch(() => new Map());
+  const { profiles: _profiles, ...row } = created as unknown as Message & { profiles: unknown };
+  void _profiles;
+  return {
+    ok: true,
+    mentions,
+    message: { ...row, authorName: resolveAuthorName(profile), authorAvatar: profile?.avatar_url ?? null, creatorName: creators.get(user.id)?.displayName ?? null },
+  };
+}
+
+export type OlderMessagesResult = {
+  messages: ChatMessage[];
+  hasMore: boolean;
+  mentions: Record<string, MessageMention[]>;
+  social: Record<string, EventSocial>;
+};
+
+/** Older history for "Ältere Nachrichten laden" (RLS still scopes it to the caller's teams). */
+export async function loadOlderMessagesAction(teamId: string, before: string): Promise<OlderMessagesResult> {
+  await requireAuthUser();
+  if (!/^[0-9a-f-]{36}$/i.test(teamId) || Number.isNaN(Date.parse(before))) return { messages: [], hasMore: false, mentions: {}, social: {} };
+  const { messages, hasMore } = await getMessagesPage(teamId, { before });
+  const [mentions, social] = await Promise.all([
+    getMessageMentions(messages.filter((m) => m.message_type !== 'system').map((m) => m.id)),
+    getEventSocial(messages.filter((m) => m.message_type === 'system').map((m) => m.id)),
+  ]);
+  return { messages, hasMore, mentions, social };
 }
 
 export type SendImageResult = { ok: true } | { ok: false; error: string };

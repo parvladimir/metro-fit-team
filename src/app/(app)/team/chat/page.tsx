@@ -1,7 +1,7 @@
 import { MessageCircle } from 'lucide-react';
 import { BackLink } from '@/components/ui/BackLink';
 import { requireAuthUser, getPrimaryTeamMembership } from '@/lib/data/profile';
-import { getRecentMessages, getChatLastReadAt, getEventSocial, getMentionMembers, getMessageMentions } from '@/lib/data/chat';
+import { getMessagesPage, getChatLastReadAt, getEventSocial, getMentionMembers, getMessageMentions } from '@/lib/data/chat';
 import { isValidMessageId } from '@/lib/event-social';
 import { ChatRoom } from '@/components/chat/ChatRoom';
 import { ChatPushPrompt } from '@/components/chat/ChatPushPrompt';
@@ -21,8 +21,8 @@ export default async function ChatPage({ searchParams }: { searchParams: Promise
     );
   }
 
-  const [messages, previousReadAt] = await Promise.all([
-    getRecentMessages(membership.team_id),
+  const [{ messages, hasMore }, previousReadAt] = await Promise.all([
+    getMessagesPage(membership.team_id),
     getChatLastReadAt(membership.team_id, user.id),
   ]);
 
@@ -51,6 +51,7 @@ export default async function ChatPage({ searchParams }: { searchParams: Promise
         initialSocial={social}
         members={members}
         initialMentions={mentions}
+        initialHasMore={hasMore}
         focusMessageId={isValidMessageId(message) ? message : null}
       />
     </div>
