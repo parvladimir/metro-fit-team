@@ -5,6 +5,9 @@ import { requireAuthUser } from '@/lib/data/profile';
 import { getWorkoutDetail, calculateVolumeKg } from '@/lib/data/workouts';
 import { formatAchieved, formatTargets, hasTargets } from '@/lib/plan-targets';
 import { WorkoutActionsMenu } from '@/components/workout/WorkoutActionsMenu';
+import { createClient } from '@/lib/supabase/server';
+import { getTeamRankingRules } from '@/lib/data/team';
+import { describeWorkoutPoints } from '@/lib/points-rules';
 import { t } from '@/lib/i18n';
 
 export default async function ZusammenfassungPage({ params }: { params: Promise<{ id: string }> }) {
@@ -12,6 +15,14 @@ export default async function ZusammenfassungPage({ params }: { params: Promise<
   const user = await requireAuthUser();
   const workout = await getWorkoutDetail(id);
   if (!workout || workout.user_id !== user.id) notFound();
+
+  // Points EARNED BY THIS workout: only ledger rows linked to it by source id (never reconstructed).
+  const supabase = await createClient();
+  const [{ data: pointEvents }, rules] = await Promise.all([
+    supabase.from('fitness_score_events').select('event_type, points').eq('user_id', user.id).eq('source_entity_id', workout.id),
+    workout.team_id ? getTeamRankingRules(workout.team_id) : Promise.resolve(null),
+  ]);
+  const workoutPoints = describeWorkoutPoints(pointEvents ?? [], { duration_bonus_threshold_minutes: rules?.duration_bonus_threshold_minutes ?? 30 });
 
   const volume = calculateVolumeKg(workout.workoutExercises);
   const minutes = workout.duration_seconds ? Math.round(workout.duration_seconds / 60) : 0;
@@ -67,6 +78,24 @@ export default async function ZusammenfassungPage({ params }: { params: Promise<
                 </p>
               </div>
             ))}
+        </section>
+      )}
+
+      {workoutPoints.lines.length > 0 && (
+        <section className="card accent-gold card-accent w-full !p-4 text-left">
+          <p className="section-title mb-2">Punkte für dieses Training</p>
+          <ul className="flex flex-col gap-1.5 text-sm">
+            {workoutPoints.lines.map((l) => (
+              <li key={l.label} className="flex items-center justify-between gap-3">
+                <span className="text-neutral-700">{l.label}</span>
+                <span className="font-bold tabular-nums text-neutral-900">+{l.points}</span>
+              </li>
+            ))}
+          </ul>
+          <div className="mt-2 flex items-center justify-between border-t border-white/10 pt-2 text-sm">
+            <span className="font-semibold text-neutral-900">Gesamt</span>
+            <span className="text-base font-extrabold tabular-nums text-accent-achievement">+{workoutPoints.total}</span>
+          </div>
         </section>
       )}
 

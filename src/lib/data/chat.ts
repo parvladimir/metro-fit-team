@@ -4,6 +4,7 @@ import { resolveAuthorName } from '@/lib/chat-identity';
 import { fetchCreators } from '@/lib/creator';
 import type { EventReply, EventSocial } from '@/lib/event-social';
 import type { MentionMember, MessageMention } from '@/lib/mentions';
+import { quoteFromMessage, type QuoteInfo } from '@/lib/chat-quote';
 import type { Message, Profile } from '@/types/database';
 
 export interface ChatMessage extends Message {
@@ -177,5 +178,27 @@ export async function getMessageMentions(messageIds: string[]): Promise<Record<s
   const supabase = await createClient();
   const { data } = await supabase.from('message_mentions').select('message_id, mentioned_user_id, mention_text').in('message_id', messageIds);
   for (const r of data ?? []) (out[r.message_id] ??= []).push({ userId: r.mentioned_user_id, text: r.mention_text });
+  return out;
+}
+
+/**
+ * The originals that replies in `messages` point to (one batched query, LEFT
+ * semantics: a missing/unreadable original just yields no entry and the reply
+ * still renders). Soft-deleted originals ARE returned, flagged `deleted`, so the
+ * reply can show "Ursprüngliche Nachricht wurde gelöscht".
+ */
+export async function getQuotes(messages: { reply_to_id: string | null }[]): Promise<Record<string, QuoteInfo>> {
+  const ids = [...new Set(messages.map((m) => m.reply_to_id).filter((id): id is string => !!id))];
+  const out: Record<string, QuoteInfo> = {};
+  if (ids.length === 0) return out;
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from('messages')
+    .select('id, content, message_type, deleted_at, profiles(full_name)')
+    .in('id', ids);
+  for (const row of data ?? []) {
+    const r = row as unknown as { id: string; content: string; message_type: string; deleted_at: string | null; profiles: { full_name: string | null } | null };
+    out[r.id] = quoteFromMessage({ id: r.id, authorName: resolveAuthorName(r.profiles), content: r.content, message_type: r.message_type, deleted_at: r.deleted_at });
+  }
   return out;
 }

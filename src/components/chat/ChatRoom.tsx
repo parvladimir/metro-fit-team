@@ -23,6 +23,8 @@ import { addReplyOnce, applyReaction, EMPTY_SOCIAL, type EventSocial as Social }
 import { toggleSupportAction, sendEventReplyAction, markNotificationsReadAction } from '@/app/(app)/team/chat/actions';
 import { refreshNotificationCount } from '@/lib/notification-store';
 import { MentionInput, type MentionInputHandle } from '@/components/chat/MentionInput';
+import { QuoteBlock } from '@/components/chat/QuoteBlock';
+import { quoteFromMessage, quotePreview, type QuoteInfo } from '@/lib/chat-quote';
 import { stillMentioned, type MentionMember, type MessageMention } from '@/lib/mentions';
 import { t } from '@/lib/i18n';
 import type { ChatMessage } from '@/lib/data/chat';
@@ -39,6 +41,7 @@ export function ChatRoom({
   members,
   initialMentions,
   initialHasMore,
+  initialQuotes,
 }: {
   teamId: string;
   currentUserId: string;
@@ -49,9 +52,13 @@ export function ChatRoom({
   members: MentionMember[];
   initialMentions: Record<string, MessageMention[]>;
   initialHasMore: boolean;
+  initialQuotes: Record<string, QuoteInfo>;
 }) {
   const [messages, setMessages] = useState(initialMessages);
   const [hasMore, setHasMore] = useState(initialHasMore);
+  const [quotes, setQuotes] = useState(initialQuotes);
+  const quoteOf = (m: { reply_to_id: string | null }) => (m.reply_to_id ? quotes[m.reply_to_id] ?? null : null);
+  const messagesRef = useRef<ChatMessage[]>(initialMessages);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const restoreScrollRef = useRef<number | null>(null);
   const [social, setSocial] = useState(initialSocial);
@@ -166,6 +173,18 @@ export function ChatRoom({
             }
             const { data: profile } = await supabase.from('profiles').select('full_name, avatar_url').eq('id', row.user_id).maybeSingle();
             const creators = await fetchCreators(supabase, [row.user_id]);
+            // A reply arrives with its relation (reply_to_id); resolve what it answers.
+            if (row.reply_to_id) {
+              const { data: o } = await supabase
+                .from('messages')
+                .select('id, content, message_type, deleted_at, profiles(full_name)')
+                .eq('id', row.reply_to_id)
+                .maybeSingle();
+              if (o) {
+                const orig = o as unknown as { id: string; content: string; message_type: string; deleted_at: string | null; profiles: { full_name: string | null } | null };
+                setQuotes((prev) => ({ ...prev, [orig.id]: quoteFromMessage({ id: orig.id, authorName: resolveAuthorName(orig.profiles), content: orig.content, message_type: orig.message_type, deleted_at: orig.deleted_at }) }));
+              }
+            }
             // The sender already added the persisted row from the server response —
             // the message id is the source of truth, so never add it twice.
             setMessages((prev) =>
@@ -190,7 +209,9 @@ export function ChatRoom({
           if (row.parent_message_id) return;
           if (row.deleted_at) {
             setMessages((prev) => prev.filter((m) => m.id !== row.id));
+            setQuotes((prev) => (prev[row.id] ? { ...prev, [row.id]: { ...prev[row.id]!, deleted: true } } : prev));
           } else {
+            setQuotes((prev) => (prev[row.id] ? { ...prev, [row.id]: { ...prev[row.id]!, preview: quotePreview(row.content) } } : prev));
             setMessages((prev) => prev.map((m) => (m.id === row.id ? { ...m, content: row.content, edited_at: row.edited_at, metadata: row.metadata } : m)));
           }
         })
@@ -253,9 +274,9 @@ export function ChatRoom({
     if (mentions.length) setMentionsMap((prev) => ({ ...prev, [message.id]: mentions }));
   }
 
-  async function loadOlder() {
-    const oldest = messages[0];
-    if (!oldest || loadingOlder) return;
+  async function loadOlder(): Promise<boolean> {
+    const oldest = messagesRef.current[0];
+    if (!oldest || loadingOlder) return false;
     setLoadingOlder(true);
     try {
       const res = await loadOlderMessagesAction(teamId, oldest.created_at);
@@ -266,10 +287,29 @@ export function ChatRoom({
       });
       setMentionsMap((prev) => ({ ...res.mentions, ...prev }));
       setSocial((prev) => ({ ...res.social, ...prev }));
+      setQuotes((prev) => ({ ...res.quotes, ...prev }));
       setHasMore(res.hasMore);
+      return res.hasMore;
     } finally {
       setLoadingOlder(false);
     }
+  }
+
+  messagesRef.current = messages;
+
+  /** Scroll to + briefly highlight the message a reply answers (loads older history if needed). */
+  async function jumpTo(id: string) {
+    let el = document.getElementById(`msg-${id}`);
+    let more = hasMore;
+    for (let i = 0; !el && more && i < 8; i++) {
+      more = await loadOlder();
+      await new Promise((r) => setTimeout(r, 80));
+      el = document.getElementById(`msg-${id}`);
+    }
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setHighlightId(id);
+    setTimeout(() => setHighlightId((cur) => (cur === id ? null : cur)), 3200);
   }
 
   // keep the reader's place when older messages are prepended
@@ -291,7 +331,10 @@ export function ChatRoom({
 
   async function removeMessage(id: string) {
     const res = await deleteMessageAction(id);
-    if (res.ok) setMessages((prev) => prev.filter((m) => m.id !== id));
+    if (res.ok) {
+      setMessages((prev) => prev.filter((m) => m.id !== id));
+      setQuotes((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id]!, deleted: true } } : prev));
+    }
   }
 
   function toggleSupport(eventId: string) {
@@ -395,6 +438,7 @@ export function ChatRoom({
         teamId: activeTeamRef.current,
         messageId,
         mentionUserIds,
+        replyToId: replyTo?.id ?? null,
         path,
         thumbPath,
         mime: prepared.mime,
@@ -403,6 +447,7 @@ export function ChatRoom({
         caption,
       });
       if (!res.ok) throw new Error(res.error);
+      if (replyTo) setQuotes((prev) => ({ ...prev, [replyTo.id]: quoteFromMessage(replyTo) }));
       clearAttachment();
       return true;
     } catch {
@@ -479,6 +524,7 @@ export function ChatRoom({
                     content={m.message_type === 'image' || m.content ? m.content : ''}
                     time={new Date(m.created_at).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}
                     onReply={() => setReplyTo(m)}
+                    quote={quoteOf(m) ? <QuoteBlock quote={quoteOf(m)!} onJump={jumpTo} /> : undefined}
                     edited={!!m.edited_at}
                     mentions={mentionsOf(m.id)}
                     currentUserId={currentUserId}
@@ -524,6 +570,11 @@ export function ChatRoom({
                         {m.authorName}
                       </span>
                     )}
+                    {quoteOf(m) && m.message_type === 'image' && !m.content && (
+                      <div className="mb-1 w-[min(64vw,260px)]">
+                        <QuoteBlock quote={quoteOf(m)!} onJump={jumpTo} tone={mine ? 'own' : 'default'} />
+                      </div>
+                    )}
                     {m.message_type === 'image' && m.attachment_path && (
                       <ChatImage
                         path={m.attachment_path}
@@ -553,6 +604,7 @@ export function ChatRoom({
                                 : 'border border-white/[0.08] bg-surface-3 text-neutral-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]'
                             }`}
                           >
+                            {quoteOf(m) && <QuoteBlock quote={quoteOf(m)!} onJump={jumpTo} tone={mine ? 'own' : 'default'} />}
                             <ChatMarkdown text={m.content} tone={mine ? 'bubble-own' : 'bubble'} mentions={mentionsOf(m.id)} currentUserId={currentUserId} />
                           </div>
                         </div>
@@ -585,6 +637,7 @@ export function ChatRoom({
               const res = await sendMessageAction(formData);
               if (res.ok) {
                 addPersisted(res.message, res.mentions);
+                if (replyTo) setQuotes((prev) => ({ ...prev, [replyTo.id]: quoteFromMessage(replyTo) }));
                 sent = true;
               } else {
                 setSendError(res.error);
@@ -615,10 +668,15 @@ export function ChatRoom({
           onChange={onPickFile}
         />
         {replyTo && (
-          <div className="flex items-center justify-between rounded-lg bg-neutral-100 px-3 py-1.5 text-xs text-neutral-500">
-            <span className="truncate">{t('chat.reply')}: {replyTo.message_type === 'image' && !replyTo.content ? 'Foto' : replyTo.content}</span>
-            <button type="button" onClick={() => setReplyTo(null)} className="btn-icon -mr-1.5 h-6 w-6 shrink-0">
-              <X size={14} strokeWidth={2.25} />
+          <div className="flex items-center gap-2 rounded-xl border-l-[3px] border-brand/70 bg-brand/[0.08] py-1.5 pl-2.5 pr-1">
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-[11px] font-bold text-brand">Antwort auf {replyTo.authorName}</p>
+              <p className="line-clamp-2 break-words text-xs leading-snug text-neutral-600 [overflow-wrap:anywhere]">
+                {replyTo.message_type === 'image' && !replyTo.content ? 'Foto' : quotePreview(replyTo.content)}
+              </p>
+            </div>
+            <button type="button" onClick={() => setReplyTo(null)} className="btn-icon h-7 w-7 shrink-0" aria-label="Antwort abbrechen">
+              <X size={15} strokeWidth={2.25} />
             </button>
           </div>
         )}
