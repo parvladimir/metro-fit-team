@@ -2,7 +2,8 @@ import Link from 'next/link';
 import clsx from 'clsx';
 import { QrCode, MessageCircle, Trophy, ChevronRight, Users, Heart, AtSign } from 'lucide-react';
 import { requireAuthUser, getCurrentProfile, getPrimaryTeamMembership } from '@/lib/data/profile';
-import { getTeamRankingWithProfiles, type RankingPeriod } from '@/lib/data/team';
+import { getTeamRankingWithProfiles, getTeamRankingRules, type RankingPeriod } from '@/lib/data/team';
+import { PointsRulesSheet } from '@/components/team/PointsRulesSheet';
 import { getTeamChallenges } from '@/lib/data/challenges';
 import { getTeamActivityFeed, renderFeedItem } from '@/lib/data/feed';
 import { ProgressBar } from '@/components/ui/ProgressBar';
@@ -39,13 +40,14 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
     );
   }
 
-  const [ranking, challenges, feed, unreadChatCount, notifications, notificationCount] = await Promise.all([
+  const [ranking, challenges, feed, unreadChatCount, notifications, notificationCount, rankingRules] = await Promise.all([
     getTeamRankingWithProfiles(membership.team_id, period),
     getTeamChallenges(membership.team_id, user.id),
     getTeamActivityFeed(membership.team_id, 15),
     getUnreadChatCount(membership.team_id),
     getRecentNotifications(user.id, 4),
     getUnreadNotificationCount(user.id),
+    getTeamRankingRules(membership.team_id),
   ]);
 
   const activeChallenge = challenges.find((c) => new Date(c.ends_at) >= new Date());
@@ -128,6 +130,11 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
           <p className="section-title">{t('team.ranking')}</p>
           {myRankIndex >= 0 && <p className="text-xs font-semibold text-brand">{t('ranking.yourRank')}: #{myRankIndex + 1}</p>}
         </div>
+        {rankingRules && (
+          <div className="-mt-1 mb-3">
+            <PointsRulesSheet rules={rankingRules} />
+          </div>
+        )}
 
         <div className="scrollbar-hide -mx-1 mb-4 flex gap-2 overflow-x-auto px-1">
           {PERIODS.map((p) => (

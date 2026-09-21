@@ -21,6 +21,7 @@ export function CreatorMessageCard({
   menu,
   editor,
   edited = false,
+  quote,
   mentions = [],
   currentUserId = null,
 }: {
@@ -36,6 +37,8 @@ export function CreatorMessageCard({
   /** When set, replaces the rendered text with the inline editor. */
   editor?: React.ReactNode;
   edited?: boolean;
+  /** compact reference to the message this one replies to */
+  quote?: React.ReactNode;
   mentions?: MessageMention[];
   currentUserId?: string | null;
 }) {
@@ -73,6 +76,8 @@ export function CreatorMessageCard({
           {CREATOR_HINT}
         </p>
       )}
+
+      {quote && <div className="mt-3">{quote}</div>}
 
       {children && <div className="mt-3">{children}</div>}
 

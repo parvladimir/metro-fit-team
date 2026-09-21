@@ -12,7 +12,8 @@ import { cleanReply, isValidMessageId, type EventReply } from '@/lib/event-socia
 import { resolveAuthorName } from '@/lib/chat-identity';
 import { stripMarkdown } from '@/lib/chat-format';
 import { fetchCreators } from '@/lib/creator';
-import { getEventSocial, getMessageMentions, getMessagesPage, type ChatMessage } from '@/lib/data/chat';
+import { getEventSocial, getMessageMentions, getMessagesPage, getQuotes, type ChatMessage } from '@/lib/data/chat';
+import type { QuoteInfo } from '@/lib/chat-quote';
 import type { EventSocial } from '@/lib/event-social';
 import type { Message } from '@/types/database';
 
@@ -93,18 +94,20 @@ export type OlderMessagesResult = {
   hasMore: boolean;
   mentions: Record<string, MessageMention[]>;
   social: Record<string, EventSocial>;
+  quotes: Record<string, QuoteInfo>;
 };
 
 /** Older history for "Ältere Nachrichten laden" (RLS still scopes it to the caller's teams). */
 export async function loadOlderMessagesAction(teamId: string, before: string): Promise<OlderMessagesResult> {
   await requireAuthUser();
-  if (!/^[0-9a-f-]{36}$/i.test(teamId) || Number.isNaN(Date.parse(before))) return { messages: [], hasMore: false, mentions: {}, social: {} };
+  if (!/^[0-9a-f-]{36}$/i.test(teamId) || Number.isNaN(Date.parse(before))) return { messages: [], hasMore: false, mentions: {}, social: {}, quotes: {} };
   const { messages, hasMore } = await getMessagesPage(teamId, { before });
-  const [mentions, social] = await Promise.all([
+  const [mentions, social, quotes] = await Promise.all([
     getMessageMentions(messages.filter((m) => m.message_type !== 'system').map((m) => m.id)),
     getEventSocial(messages.filter((m) => m.message_type === 'system').map((m) => m.id)),
+    getQuotes(messages),
   ]);
-  return { messages, hasMore, mentions, social };
+  return { messages, hasMore, mentions, social, quotes };
 }
 
 export type SendImageResult = { ok: true } | { ok: false; error: string };
@@ -124,6 +127,7 @@ export async function sendImageMessageAction(input: {
   height: number;
   caption: string;
   mentionUserIds?: string[];
+  replyToId?: string | null;
 }): Promise<SendImageResult> {
   const user = await requireAuthUser();
   const supabase = await createClient();
@@ -160,6 +164,7 @@ export async function sendImageMessageAction(input: {
     attachment_width: input.width,
     attachment_height: input.height,
     metadata: { thumb_path: input.thumbPath },
+    reply_to_id: input.replyToId && uuid.test(input.replyToId) ? input.replyToId : null,
   });
 
   if (error) {

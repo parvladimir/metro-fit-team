@@ -959,4 +959,102 @@ describeIntegration('Row Level Security', () => {
     const old = await userB.client.from('messages').select('id').eq('team_id', teamId).order('created_at', { ascending: true }).limit(50);
     expect((old.data ?? []).map((m) => m.id)).not.toContain(sent.data!.id);
   });
+  it('59. reply relation persists, reads back with the original (incl. soft-deleted), and stays team-private', async () => {
+    const orig = await userA.client.from('messages').insert({ team_id: teamId, user_id: userA.id, content: 'Hmm irgendwie sind meine 30 Minuten Rad nicht mit aufgenommen ...' }).select('id').single();
+    const reply = await userB.client.from('messages').insert({ team_id: teamId, user_id: userB.id, content: '@Alma Ich schaue später nach.', reply_to_id: orig.data!.id }).select('id, reply_to_id').single();
+    expect(reply.error).toBeNull();
+    expect(reply.data!.reply_to_id).toBe(orig.data!.id);
+
+    // reload-shaped read still carries the relation, and the original is readable for the quote
+    const page = await userB.client.from('messages').select('id, reply_to_id').eq('team_id', teamId).order('created_at', { ascending: false }).limit(60);
+    expect(page.data!.find((m) => m.id === reply.data!.id)!.reply_to_id).toBe(orig.data!.id);
+    const q1 = await userB.client.from('messages').select('id, content, deleted_at, profiles(full_name)').in('id', [orig.data!.id]);
+    expect(q1.data![0]!.deleted_at).toBeNull();
+
+    // original deleted (soft): the reply keeps its relation and the quote lookup reports it as deleted
+    await userA.client.from('messages').update({ deleted_at: new Date().toISOString() }).eq('id', orig.data!.id);
+    const q2 = await userB.client.from('messages').select('id, deleted_at').in('id', [orig.data!.id]);
+    expect(q2.data![0]!.deleted_at).not.toBeNull();
+    const after = await admin.from('messages').select('reply_to_id').eq('id', reply.data!.id).single();
+    expect(after.data!.reply_to_id).toBe(orig.data!.id);
+
+    // an outsider can neither read the reply nor the original
+    expect((await outsider.client.from('messages').select('id').in('id', [orig.data!.id, reply.data!.id])).data).toEqual([]);
+    // the relation of an existing message cannot be rewritten by an edit
+    const hijack = await userB.client.from('messages').update({ reply_to_id: null }).eq('id', reply.data!.id).select('id');
+    expect(hijack.error !== null || (hijack.data ?? []).length === 0).toBe(true);
+  });
+
+  describe('Punkteverteilung matches real scoring', () => {
+    let P: typeof userB;
+    let rules: import('../../src/lib/points-rules').PointsRules;
+    const events = async () => (await admin.from('fitness_score_events').select('event_type, points, event_date').eq('user_id', P.id).eq('team_id', teamId)).data ?? [];
+    const sum = (rows: { event_type: string; points: number }[], t: string) => rows.filter((r) => r.event_type === t).reduce((a, r) => a + r.points, 0);
+    const finish = async (title: string, minutes: number, day: Date) => {
+      const { data: w } = await P.client.from('workouts').insert({ user_id: P.id, team_id: teamId, activity_type: 'krafttraining', status: 'laeuft', title, started_at: new Date(day.getTime() - minutes * 60000).toISOString() }).select('id').single();
+      const r = await P.client.from('workouts').update({ status: 'abgeschlossen', finished_at: day.toISOString(), duration_seconds: minutes * 60 }).eq('id', w!.id);
+      expect(r.error).toBeNull();
+      return w!.id as string;
+    };
+    const weekDay = (offset: number) => {
+      const d = new Date();
+      const wd = (d.getUTCDay() + 6) % 7; // Monday = 0
+      d.setUTCDate(d.getUTCDate() - wd + offset);
+      d.setUTCHours(12, 0, 0, 0);
+      return d;
+    };
+
+    beforeAll(async () => {
+      P = await createTestUser('points-owner');
+      await admin.from('team_members').insert({ team_id: teamId, user_id: P.id, role: 'member' });
+      await admin.from('profiles').update({ weekly_goal: 3 }).eq('id', P.id);
+      const { data } = await admin.from('team_ranking_rules').select('*').eq('team_id', teamId).single();
+      rules = data as never;
+    });
+    afterAll(async () => {
+      await admin.auth.admin.deleteUser(P.id).catch(() => undefined);
+    });
+
+    it('60. <30 min earns only the base points; >=30 min adds the duration bonus (matches the shown rules)', async () => {
+      const { describePointsRules } = await import('../../src/lib/points-rules');
+      const shown = Object.fromEntries(describePointsRules(rules).items.map((i) => [i.key, i.amount]));
+      const short = await finish('kurz', 20, weekDay(0));
+      const long = await finish('lang', 45, weekDay(1));
+      const ev = (await admin.from('fitness_score_events').select('event_type, points, source_entity_id').eq('user_id', P.id)).data ?? [];
+      const forShort = ev.filter((e) => e.source_entity_id === short);
+      const forLong = ev.filter((e) => e.source_entity_id === long);
+      expect(forShort.map((e) => e.event_type)).toEqual(['workout_completed']);
+      expect(`+${forShort[0]!.points}`).toBe(shown.workout);
+      expect(forLong.map((e) => e.event_type).sort()).toEqual(['workout_completed', 'workout_duration_bonus']);
+      expect(`+${forLong.find((e) => e.event_type === 'workout_duration_bonus')!.points}`).toBe(shown.duration);
+    });
+
+    it('61. third distinct day: weekly-goal bonus and consistency bonus match the shown rules', async () => {
+      const { describePointsRules } = await import('../../src/lib/points-rules');
+      const shown = Object.fromEntries(describePointsRules(rules).items.map((i) => [i.key, i.amount]));
+      await finish('dritter Tag', 35, weekDay(2));
+      const ev = await events();
+      expect(`+${sum(ev, 'weekly_goal_reached')}`).toBe(shown.weekly_goal);
+      expect(`+${sum(ev, 'consistency_bonus')}`).toBe(shown.consistency);
+    });
+
+    it('62. daily cap: capped kinds never exceed the shown limit on one day; weekly goal is exempt', async () => {
+      const day = weekDay(3);
+      await finish('cap 1', 40, day);
+      await finish('cap 2', 40, day);
+      const ev = (await events()).filter((e) => (e.event_date as string) === day.toISOString().slice(0, 10));
+      const capped = ev.filter((e) => ['workout_completed', 'workout_duration_bonus', 'consistency_bonus'].includes(e.event_type)).reduce((a, e) => a + e.points, 0);
+      expect(capped).toBeLessThanOrEqual(rules.daily_cap_points);
+      expect(capped).toBe(rules.daily_cap_points);
+    });
+
+    it('63. challenge points come from the challenge itself ("Je nach Challenge")', async () => {
+      const today = new Date().toISOString().slice(0, 10);
+      const { data: ch } = await admin.from('challenges').insert({ team_id: teamId, title: 'Punkte-Test', challenge_type: 'individual', metric: 'custom', target_value: 1, starts_at: today, ends_at: today, points_reward: 75, created_by: userA.id }).select('id').single();
+      await admin.from('challenge_participants').insert({ challenge_id: ch!.id, user_id: P.id, progress_value: 1 });
+      const ev = await events();
+      expect(sum(ev, 'challenge_completed')).toBe(75);
+      await admin.from('challenges').delete().eq('id', ch!.id);
+    });
+  });
 });
