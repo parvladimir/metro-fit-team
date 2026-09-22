@@ -105,7 +105,10 @@ export async function saveAsTemplateAction(weekday: number, name: string): Promi
     .insert({ user_id: user.id, name: cleanName })
     .select('id')
     .single();
-  if (templateError || !template) return { ok: false, error: 'Vorlage konnte nicht gespeichert werden.' };
+  if (templateError || !template) {
+    console.error('[plan-templates] create failed', templateError?.code, templateError?.message?.slice(0, 160));
+    return { ok: false, error: 'Vorlage konnte nicht gespeichert werden.' };
+  }
 
   if (day.exercises.length > 0) {
     const { error: itemsError } = await supabase.from('plan_template_items').insert(
@@ -123,6 +126,7 @@ export async function saveAsTemplateAction(weekday: number, name: string): Promi
       })),
     );
     if (itemsError) {
+      console.error('[plan-templates] item insert failed', itemsError.code, itemsError.message?.slice(0, 160));
       await supabase.from('plan_templates').delete().eq('id', template.id);
       return { ok: false, error: 'Vorlage konnte nicht gespeichert werden.' };
     }
@@ -161,7 +165,10 @@ export async function createDayFromTemplateAction(templateId: string, weekday: n
     .upsert({ plan_id: plan.id, weekday, title: template.name }, { onConflict: 'plan_id,weekday' })
     .select('id')
     .single();
-  if (dayError || !day) return { ok: false, error: 'Tag konnte nicht erstellt werden.' };
+  if (dayError || !day) {
+    console.error('[plan-templates] day upsert failed', dayError?.code, dayError?.message?.slice(0, 160));
+    return { ok: false, error: 'Tag konnte nicht erstellt werden.' };
+  }
 
   // "Aus Vorlage erstellen" replaces this day's exercises with an independent
   // copy of the template's — it never edits the template or other days.
@@ -181,7 +188,10 @@ export async function createDayFromTemplateAction(templateId: string, weekday: n
         target_metrics: it.target_metrics,
       })),
     );
-    if (insertError) return { ok: false, error: 'Übungen konnten nicht übernommen werden.' };
+    if (insertError) {
+      console.error('[plan-templates] apply failed', insertError.code, insertError.message?.slice(0, 160));
+      return { ok: false, error: 'Übungen konnten nicht übernommen werden.' };
+    }
   }
 
   await supabase.from('plan_templates').update({ last_used_at: new Date().toISOString() }).eq('id', templateId);
@@ -199,7 +209,10 @@ export async function renameTemplateAction(templateId: string, name: string): Pr
   if (!cleanName) return { ok: false, error: 'Bitte einen Namen eingeben.' };
 
   const { error } = await supabase.from('plan_templates').update({ name: cleanName }).eq('id', templateId).eq('user_id', user.id);
-  if (error) return { ok: false, error: 'Vorlage konnte nicht umbenannt werden.' };
+  if (error) {
+    console.error('[plan-templates] rename failed', error.code, error.message?.slice(0, 160));
+    return { ok: false, error: 'Vorlage konnte nicht umbenannt werden.' };
+  }
 
   revalidatePath('/plan');
   return { ok: true };
@@ -224,13 +237,17 @@ export async function duplicateTemplateAction(templateId: string): Promise<Templ
     .insert({ user_id: user.id, name: sanitizeTemplateName(`${source.name} (Kopie)`) })
     .select('id')
     .single();
-  if (copyError || !copy) return { ok: false, error: 'Vorlage konnte nicht dupliziert werden.' };
+  if (copyError || !copy) {
+    console.error('[plan-templates] duplicate failed', copyError?.code, copyError?.message?.slice(0, 160));
+    return { ok: false, error: 'Vorlage konnte nicht dupliziert werden.' };
+  }
 
   if (items && items.length > 0) {
     const { error: itemsError } = await supabase.from('plan_template_items').insert(
       items.map((it) => ({ ...it, template_id: copy.id })),
     );
     if (itemsError) {
+      console.error('[plan-templates] duplicate items failed', itemsError.code, itemsError.message?.slice(0, 160));
       await supabase.from('plan_templates').delete().eq('id', copy.id);
       return { ok: false, error: 'Vorlage konnte nicht dupliziert werden.' };
     }
@@ -245,7 +262,10 @@ export async function deleteTemplateAction(templateId: string): Promise<Template
   await requireAuthUser();
   const supabase = await createClient();
   const { error } = await supabase.from('plan_templates').delete().eq('id', templateId);
-  if (error) return { ok: false, error: 'Vorlage konnte nicht gelöscht werden.' };
+  if (error) {
+    console.error('[plan-templates] delete failed', error.code, error.message?.slice(0, 160));
+    return { ok: false, error: 'Vorlage konnte nicht gelöscht werden.' };
+  }
 
   revalidatePath('/plan');
   return { ok: true };
@@ -259,7 +279,10 @@ export async function removeDeadTemplateItemsAction(templateId: string): Promise
   if (!template || template.user_id !== user.id) return { ok: false, error: 'Vorlage nicht gefunden.' };
 
   const { error } = await supabase.from('plan_template_items').delete().eq('template_id', templateId).is('exercise_id', null);
-  if (error) return { ok: false, error: 'Konnte nicht bereinigt werden.' };
+  if (error) {
+    console.error('[plan-templates] cleanup failed', error.code, error.message?.slice(0, 160));
+    return { ok: false, error: 'Konnte nicht bereinigt werden.' };
+  }
 
   revalidatePath('/plan');
   return { ok: true };
