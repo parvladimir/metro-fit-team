@@ -2,10 +2,17 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useFormStatus } from 'react-dom';
-import { CheckCircle2, Dumbbell, ImagePlus, Loader2, MessageCircle, Play, Target, Trophy, X } from 'lucide-react';
+import { CheckCircle2, Dumbbell, ImagePlus, Layers, Loader2, MessageCircle, Play, Target, Trophy, X } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { sendMessageAction, sendImageMessageAction, markChatReadAction, loadOlderMessagesAction } from '@/app/(app)/team/chat/actions';
+import { withdrawShareAction } from '@/app/(app)/team/chat/share-actions';
 import { ChatImage } from '@/components/chat/ChatImage';
+import { SharedPlanCard } from '@/components/sharing/SharedPlanCard';
+import { ShareDetailSheet } from '@/components/sharing/ShareDetailSheet';
+import { ImportShareDialog } from '@/components/sharing/ImportShareDialog';
+import { SharePickerSheet } from '@/components/sharing/SharePickerSheet';
+import type { PlanShareForViewer, PlanShareWithItems } from '@/lib/data/plan-shares';
+import type { PlanTemplateWithItems } from '@/lib/data/plan-templates';
 import { formatSystemEvent } from '@/lib/chat-events';
 import { ImageError, prepareChatImage, type PreparedImage } from '@/lib/image-compress';
 import { refreshUnread } from '@/lib/unread-store';
@@ -42,6 +49,8 @@ export function ChatRoom({
   initialMentions,
   initialHasMore,
   initialQuotes,
+  initialShares,
+  myTemplates,
 }: {
   teamId: string;
   currentUserId: string;
@@ -53,11 +62,17 @@ export function ChatRoom({
   initialMentions: Record<string, MessageMention[]>;
   initialHasMore: boolean;
   initialQuotes: Record<string, QuoteInfo>;
+  initialShares: Record<string, PlanShareForViewer>;
+  myTemplates: PlanTemplateWithItems[];
 }) {
   const [messages, setMessages] = useState(initialMessages);
   const [hasMore, setHasMore] = useState(initialHasMore);
   const [quotes, setQuotes] = useState(initialQuotes);
   const quoteOf = (m: { reply_to_id: string | null }) => (m.reply_to_id ? quotes[m.reply_to_id] ?? null : null);
+  const [shares, setShares] = useState(initialShares);
+  const [viewingShare, setViewingShare] = useState<PlanShareForViewer | null>(null);
+  const [savingShare, setSavingShare] = useState<PlanShareForViewer | null>(null);
+  const [pickingTemplate, setPickingTemplate] = useState(false);
   const messagesRef = useRef<ChatMessage[]>(initialMessages);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const restoreScrollRef = useRef<number | null>(null);
@@ -185,6 +200,32 @@ export function ChatRoom({
                 setQuotes((prev) => ({ ...prev, [orig.id]: quoteFromMessage({ id: orig.id, authorName: resolveAuthorName(orig.profiles), content: orig.content, message_type: orig.message_type, deleted_at: orig.deleted_at }) }));
               }
             }
+            // A share card carries a cheap hint in metadata so only an actual
+            // share message costs an extra lookup, never every plain message.
+            const alreadyHave = messagesRef.current.some((m) => m.id === row.id);
+            const shareId = typeof row.metadata?.plan_share_id === 'string' ? row.metadata.plan_share_id : null;
+            if (!alreadyHave && shareId) {
+              const { data: s } = await supabase
+                .from('plan_shares')
+                .select('*, plan_share_items(*), profiles(full_name)')
+                .eq('id', shareId)
+                .maybeSingle();
+              if (s) {
+                const { plan_share_items, profiles, ...share } = s as unknown as PlanShareWithItems & {
+                  plan_share_items: PlanShareWithItems['items'];
+                  profiles: { full_name: string | null } | null;
+                };
+                setShares((prev) => ({
+                  ...prev,
+                  [row.id]: {
+                    ...share,
+                    authorName: profiles?.full_name?.trim() || 'Ein Teammitglied',
+                    items: [...plan_share_items].sort((a, b) => a.position - b.position),
+                    savedTemplateId: null,
+                  },
+                }));
+              }
+            }
             // The sender already added the persisted row from the server response —
             // the message id is the source of truth, so never add it twice.
             setMessages((prev) =>
@@ -214,6 +255,12 @@ export function ChatRoom({
             setQuotes((prev) => (prev[row.id] ? { ...prev, [row.id]: { ...prev[row.id]!, preview: quotePreview(row.content) } } : prev));
             setMessages((prev) => prev.map((m) => (m.id === row.id ? { ...m, content: row.content, edited_at: row.edited_at, metadata: row.metadata } : m)));
           }
+        })
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'plan_shares', filter: `team_id=eq.${teamId}` }, (payload) => {
+          // Only withdrawn_at ever changes after publish (the snapshot itself
+          // is immutable) — reflect it live for every viewer, not just the author.
+          const row = payload.new as { message_id: string; withdrawn_at: string | null };
+          setShares((prev) => (prev[row.message_id] ? { ...prev, [row.message_id]: { ...prev[row.message_id]!, withdrawn_at: row.withdrawn_at } } : prev));
         })
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'message_mentions', filter: `team_id=eq.${teamId}` }, (payload) => {
           const r = payload.new as { message_id: string; mentioned_user_id: string; mention_text: string };
@@ -274,6 +321,30 @@ export function ChatRoom({
     if (mentions.length) setMentionsMap((prev) => ({ ...prev, [message.id]: mentions }));
   }
 
+  /** Same as addPersisted, but for a shared-plan card (message + its snapshot). */
+  function addPersistedShare(message: ChatMessage, share: PlanShareWithItems) {
+    addPersisted(message, []);
+    setShares((prev) => ({ ...prev, [message.id]: { ...share, savedTemplateId: null } }));
+  }
+
+  function markShareSaved(shareId: string, templateId: string) {
+    setShares((prev) => {
+      const entry = Object.entries(prev).find(([, s]) => s.id === shareId);
+      if (!entry) return prev;
+      return { ...prev, [entry[0]]: { ...entry[1], savedTemplateId: templateId } };
+    });
+  }
+
+  async function withdrawShare(shareId: string) {
+    const res = await withdrawShareAction(shareId);
+    if (!res.ok) return;
+    setShares((prev) => {
+      const entry = Object.entries(prev).find(([, s]) => s.id === shareId);
+      if (!entry) return prev;
+      return { ...prev, [entry[0]]: { ...entry[1], withdrawn_at: new Date().toISOString() } };
+    });
+  }
+
   async function loadOlder(): Promise<boolean> {
     const oldest = messagesRef.current[0];
     if (!oldest || loadingOlder) return false;
@@ -288,6 +359,7 @@ export function ChatRoom({
       setMentionsMap((prev) => ({ ...res.mentions, ...prev }));
       setSocial((prev) => ({ ...res.social, ...prev }));
       setQuotes((prev) => ({ ...res.quotes, ...prev }));
+      setShares((prev) => ({ ...res.shares, ...prev }));
       setHasMore(res.hasMore);
       return res.hasMore;
     } finally {
@@ -504,6 +576,8 @@ export function ChatRoom({
               );
             }
 
+            const share = shares[m.id];
+
             if (isCreatorCardMessage(m, m.creatorName ? { displayName: m.creatorName } : null)) {
               return (
                 <div
@@ -521,7 +595,7 @@ export function ChatRoom({
                   <CreatorMessageCard
                     name={m.creatorName!}
                     avatar={m.authorAvatar}
-                    content={m.message_type === 'image' || m.content ? m.content : ''}
+                    content={share ? (share.title !== m.content ? m.content : '') : m.message_type === 'image' || m.content ? m.content : ''}
                     time={new Date(m.created_at).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}
                     onReply={() => setReplyTo(m)}
                     quote={quoteOf(m) ? <QuoteBlock quote={quoteOf(m)!} onJump={jumpTo} /> : undefined}
@@ -535,6 +609,15 @@ export function ChatRoom({
                       ) : undefined
                     }
                   >
+                    {share && (
+                      <SharedPlanCard
+                        share={share}
+                        isAuthor={mine}
+                        onView={() => setViewingShare(share)}
+                        onSave={() => setSavingShare(share)}
+                        onWithdraw={() => withdrawShare(share.id)}
+                      />
+                    )}
                     {m.message_type === 'image' && m.attachment_path && (
                       <ChatImage
                         fluid
@@ -545,6 +628,58 @@ export function ChatRoom({
                       />
                     )}
                   </CreatorMessageCard>
+                </div>
+              );
+            }
+
+            if (share) {
+              return (
+                <div
+                  key={m.id}
+                  id={`msg-${m.id}`}
+                  className={`rounded-2xl transition-shadow duration-500 ${highlightId === m.id ? 'shadow-[0_0_0_2px_rgba(0,215,245,0.55)]' : ''}`}
+                >
+                  {m.id === firstUnreadId && (
+                    <div className="mb-3 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-brand">
+                      <span className="h-px flex-1 bg-brand/25" />
+                      {t('chat.newMessages')}
+                      <span className="h-px flex-1 bg-brand/25" />
+                    </div>
+                  )}
+                  <div className={`flex items-end gap-2 ${mine ? 'flex-row-reverse' : 'flex-row'}`}>
+                    {!mine && <Avatar src={m.authorAvatar} name={m.authorName} size="sm" />}
+                    <div className={`flex min-w-0 flex-col ${mine ? 'items-end' : 'items-start'}`}>
+                      {!mine && (
+                        <span className={`mb-0.5 px-1 text-[11px] font-medium ${isFormerMember ? 'italic text-neutral-500' : 'text-neutral-400'}`}>
+                          {m.authorName}
+                        </span>
+                      )}
+                      {quoteOf(m) && (
+                        <div className="mb-1 w-[min(84vw,340px)]">
+                          <QuoteBlock quote={quoteOf(m)!} onJump={jumpTo} tone={mine ? 'own' : 'default'} />
+                        </div>
+                      )}
+                      <SharedPlanCard
+                        share={share}
+                        isAuthor={mine}
+                        onView={() => setViewingShare(share)}
+                        onSave={() => setSavingShare(share)}
+                        onWithdraw={() => withdrawShare(share.id)}
+                      />
+                      {share.title !== m.content && (
+                        <div className="mt-1 flex items-start gap-1">
+                          {mine && <MessageActions onEdit={() => setEditingId(m.id)} onDelete={() => removeMessage(m.id)} />}
+                          <div className="min-w-0 max-w-[78vw] px-1 text-sm leading-relaxed text-neutral-600">
+                            <ChatMarkdown text={m.content} tone="bubble" mentions={mentionsOf(m.id)} currentUserId={currentUserId} />
+                          </div>
+                        </div>
+                      )}
+                      <span className="mt-0.5 px-1 text-[10px] text-neutral-400">
+                        {m.edited_at && <span className="mr-1 italic">bearbeitet</span>}
+                        {new Date(m.created_at).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </div>
+                  </div>
                 </div>
               );
             }
@@ -711,6 +846,15 @@ export function ChatRoom({
           >
             <ImagePlus size={20} strokeWidth={1.9} />
           </button>
+          <button
+            type="button"
+            onClick={() => setPickingTemplate(true)}
+            disabled={preparing || sending}
+            className="btn-icon h-11 w-11 shrink-0 border border-white/[0.08] bg-surface-3 text-neutral-600"
+            aria-label="Vorlage teilen"
+          >
+            <Layers size={19} strokeWidth={1.9} />
+          </button>
           <MentionInput
             ref={composerRef}
             value={draft}
@@ -734,6 +878,26 @@ export function ChatRoom({
           <SendButton label={t('chat.send')} />
         </div>
       </form>
+
+      {viewingShare && <ShareDetailSheet share={viewingShare} onClose={() => setViewingShare(null)} />}
+      {savingShare && (
+        <ImportShareDialog
+          share={savingShare}
+          onClose={() => setSavingShare(null)}
+          onSaved={(templateId) => markShareSaved(savingShare.id, templateId)}
+        />
+      )}
+      {pickingTemplate && (
+        <SharePickerSheet
+          teamId={teamId}
+          templates={myTemplates}
+          onClose={() => setPickingTemplate(false)}
+          onShared={(message, share) => {
+            addPersistedShare(message, share);
+            setPickingTemplate(false);
+          }}
+        />
+      )}
     </div>
   );
 }

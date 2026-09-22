@@ -368,9 +368,56 @@ export interface Message {
   attachment_height: number | null;
   event_type: string | null;
   metadata: Record<string, unknown>;
+  /** Set when a completed workout was later edited/deleted, to keep this event's text in sync. */
+  workout_id: string | null;
   created_at: string;
   edited_at: string | null;
   deleted_at: string | null;
+}
+
+export interface PlanShare {
+  id: string;
+  message_id: string;
+  team_id: string;
+  author_id: string;
+  source_type: 'template' | 'workout';
+  source_template_id: string | null;
+  source_plan_day_id: string | null;
+  source_workout_id: string | null;
+  title: string;
+  share_weights: boolean;
+  share_instructions: boolean;
+  actual_duration_seconds: number | null;
+  actual_distance_km: number | null;
+  withdrawn_at: string | null;
+  created_at: string;
+}
+
+export interface PlanShareItem {
+  id: string;
+  share_id: string;
+  position: number;
+  exercise_name: string;
+  exercise_type: ExerciseType;
+  muscle_group: MuscleGroup;
+  equipment: string | null;
+  instructions: string | null;
+  reusable_exercise_id: string | null;
+  target_sets: number | null;
+  target_reps: number | null;
+  target_weight_kg: number | null;
+  target_duration_seconds: number | null;
+  target_distance_km: number | null;
+  target_metrics: { rounds?: number; work_seconds?: number; rest_seconds?: number };
+  created_at: string;
+}
+
+export interface PlanShareImport {
+  id: string;
+  share_id: string;
+  recipient_id: string;
+  template_id: string | null;
+  created_at: string;
 }
 
 export interface ActivityFeedItem {

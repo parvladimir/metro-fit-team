@@ -1165,4 +1165,265 @@ describeIntegration('Row Level Security', () => {
       expect(stillThere.data!.target_sets).toBe(5);
     });
   });
+
+  describe('Plan shares (share a template/day/workout into team chat)', () => {
+    let globalStrengthId: string;
+    let globalCardioId: string;
+    let customExerciseId: string;
+    let templateId: string;
+    let planDayId: string;
+    let workoutId: string;
+
+    beforeAll(async () => {
+      const { data: ex } = await admin.from('exercises').select('id, exercise_type').is('team_id', null).order('name');
+      globalStrengthId = ex!.find((e) => e.exercise_type === 'strength')!.id;
+      globalCardioId = ex!.find((e) => e.exercise_type === 'cardio_distance' || e.exercise_type === 'cardio')!.id;
+
+      const { data: custom } = await userA.client
+        .from('exercises')
+        .insert({ name: 'Geheime Übung von A', muscle_group: 'back', exercise_type: 'strength', owner_user_id: userA.id, is_custom: true, visibility: 'private', created_by: userA.id })
+        .select('id')
+        .single();
+      customExerciseId = custom!.id;
+
+      const { data: tpl } = await userA.client.from('plan_templates').insert({ user_id: userA.id, name: 'Push A' }).select('id').single();
+      templateId = tpl!.id;
+      await userA.client.from('plan_template_items').insert([
+        { template_id: templateId, exercise_id: globalStrengthId, exercise_name: 'Bankdrücken', position: 0, target_sets: 3, target_reps: 10, target_weight_kg: 80 },
+        { template_id: templateId, exercise_id: customExerciseId, exercise_name: 'Geheime Übung von A', position: 1, target_sets: 3, target_reps: 8, target_weight_kg: 40 },
+      ]);
+
+      const { data: plan } = await userA.client.from('workout_plans').insert({ user_id: userA.id, name: 'Plan A' }).select('id').single();
+      const { data: day } = await userA.client.from('workout_plan_days').insert({ plan_id: plan!.id, weekday: 5, title: 'Beintag' }).select('id').single();
+      planDayId = day!.id;
+      await userA.client.from('workout_plan_exercises').insert({ plan_day_id: planDayId, exercise_id: globalCardioId, position: 0, target_distance_km: 5, target_duration_seconds: 1800 });
+
+      const { data: w } = await userA.client
+        .from('workouts')
+        .insert({ user_id: userA.id, team_id: teamId, activity_type: 'krafttraining', status: 'laeuft', title: 'Fertiges Training', started_at: new Date(Date.now() - 1800000).toISOString() })
+        .select('id')
+        .single();
+      workoutId = w!.id;
+      const { data: we } = await admin
+        .from('workout_exercises')
+        .insert({ workout_id: workoutId, exercise_id: globalStrengthId, position: 0, planned: { sets: 4, reps: 8, weightKg: 90 } })
+        .select('id')
+        .single();
+      await admin.from('workout_sets').insert({ workout_exercise_id: we!.id, set_number: 1, weight_kg: 92.5, reps: 7, completed: true });
+      await userA.client.from('workouts').update({ status: 'abgeschlossen', finished_at: new Date().toISOString(), duration_seconds: 1800 }).eq('id', workoutId);
+    });
+
+    it('69. author publishes a template share: message + snapshot created, a teammate sees it, an outsider cannot', async () => {
+      const before = await admin.from('messages').select('id', { count: 'exact', head: true }).eq('team_id', teamId);
+      const res = await userA.client.rpc('publish_plan_share', { p_team_id: teamId, p_source_type: 'template', p_source_template_id: templateId, p_note: 'Das ist mein aktueller Push-Plan.' });
+      expect(res.error).toBeNull();
+      const { message_id, share_id } = res.data![0];
+      const after = await admin.from('messages').select('id', { count: 'exact', head: true }).eq('team_id', teamId);
+      expect((after.count ?? 0) - (before.count ?? 0)).toBe(1);
+
+      const asB = await userB.client.from('plan_shares').select('id, title, message_id, source_type').eq('id', share_id).single();
+      expect(asB.error).toBeNull();
+      expect(asB.data!.title).toBe('Push A');
+      expect(asB.data!.message_id).toBe(message_id);
+
+      const itemsAsB = await userB.client.from('plan_share_items').select('exercise_name, position').eq('share_id', share_id).order('position');
+      expect((itemsAsB.data ?? []).map((i) => i.exercise_name)).toEqual(['Bankdrücken', 'Geheime Übung von A']);
+
+      const msgAsB = await userB.client.from('messages').select('content, message_type').eq('id', message_id).single();
+      expect(msgAsB.data!.message_type).toBe('text');
+      expect(msgAsB.data!.content).toBe('Das ist mein aktueller Push-Plan.');
+
+      expect((await outsider.client.from('plan_shares').select('id').eq('id', share_id)).data).toEqual([]);
+      expect((await outsider.client.from('messages').select('id').eq('id', message_id)).data).toEqual([]);
+    });
+
+    it('70. sharing directly from a live (unsaved) plan day works and falls back to the day title', async () => {
+      const res = await userA.client.rpc('publish_plan_share', { p_team_id: teamId, p_source_type: 'template', p_source_plan_day_id: planDayId });
+      expect(res.error).toBeNull();
+      const share = await admin.from('plan_shares').select('title, source_plan_day_id').eq('id', res.data![0].share_id).single();
+      expect(share.data!.title).toBe('Beintag');
+      const items = await admin.from('plan_share_items').select('exercise_name, target_distance_km').eq('share_id', res.data![0].share_id);
+      expect(items.data![0]!.exercise_name).toBeTruthy();
+      expect(Number(items.data![0]!.target_distance_km)).toBe(5);
+    });
+
+    it('71. weights and instructions are absent from the stored rows unless explicitly shared (checked in the data, not just the UI)', async () => {
+      const withoutOptIn = await userA.client.rpc('publish_plan_share', { p_team_id: teamId, p_source_type: 'template', p_source_template_id: templateId });
+      const itemsA = await admin.from('plan_share_items').select('target_weight_kg, instructions').eq('share_id', withoutOptIn.data![0].share_id);
+      expect(itemsA.data!.every((i) => i.target_weight_kg === null)).toBe(true);
+      expect(itemsA.data!.every((i) => i.instructions === null)).toBe(true);
+
+      const withOptIn = await userA.client.rpc('publish_plan_share', { p_team_id: teamId, p_source_type: 'template', p_source_template_id: templateId, p_share_weights: true });
+      const itemsB = await admin.from('plan_share_items').select('target_weight_kg').eq('share_id', withOptIn.data![0].share_id).order('position');
+      expect(Number(itemsB.data![0]!.target_weight_kg)).toBe(80);
+    });
+
+    it('72. a private custom exercise never leaks its id: reusable_exercise_id stays null, only the allowlisted snapshot travels', async () => {
+      const res = await userA.client.rpc('publish_plan_share', { p_team_id: teamId, p_source_type: 'template', p_source_template_id: templateId });
+      const items = await admin.from('plan_share_items').select('exercise_name, reusable_exercise_id').eq('share_id', res.data![0].share_id).order('position');
+      const globalItem = items.data!.find((i) => i.exercise_name === 'Bankdrücken')!;
+      const privateItem = items.data!.find((i) => i.exercise_name === 'Geheime Übung von A')!;
+      expect(globalItem.reusable_exercise_id).toBe(globalStrengthId);
+      expect(privateItem.reusable_exercise_id).toBeNull();
+    });
+
+    it('73. forged/invalid publish attempts are rejected: someone else\'s template, an incomplete workout, a non-owned workout', async () => {
+      const forgedTemplate = await userB.client.rpc('publish_plan_share', { p_team_id: teamId, p_source_type: 'template', p_source_template_id: templateId });
+      expect(forgedTemplate.error).not.toBeNull();
+
+      const { data: runningWorkout } = await userA.client
+        .from('workouts')
+        .insert({ user_id: userA.id, team_id: teamId, activity_type: 'krafttraining', status: 'laeuft', title: 'Läuft noch' })
+        .select('id')
+        .single();
+      const notCompleted = await userA.client.rpc('publish_plan_share', { p_team_id: teamId, p_source_type: 'workout', p_source_workout_id: runningWorkout!.id });
+      expect(notCompleted.error).not.toBeNull();
+
+      const forgedWorkout = await userB.client.rpc('publish_plan_share', { p_team_id: teamId, p_source_type: 'workout', p_source_workout_id: workoutId });
+      expect(forgedWorkout.error).not.toBeNull();
+    });
+
+    it('74. a client cannot directly insert or update plan_shares/plan_share_items (no such RLS policy exists)', async () => {
+      const directInsert = await userA.client.from('plan_shares').insert({ message_id: crypto.randomUUID(), team_id: teamId, author_id: userA.id, source_type: 'template', title: 'Injiziert' });
+      expect(directInsert.error).not.toBeNull();
+      const res = await userA.client.rpc('publish_plan_share', { p_team_id: teamId, p_source_type: 'template', p_source_template_id: templateId });
+      const directUpdate = await userB.client.from('plan_shares').update({ title: 'Gehackt' }).eq('id', res.data![0].share_id).select('id');
+      expect(directUpdate.data ?? []).toEqual([]);
+    });
+
+    it('75. recipient imports an independent copy: owns the new template, strength targets retained, weight stripped by default', async () => {
+      const shared = await userA.client.rpc('publish_plan_share', { p_team_id: teamId, p_source_type: 'template', p_source_template_id: templateId, p_share_weights: true });
+      const shareId = shared.data![0].share_id as string;
+
+      const imported = await userB.client.rpc('import_plan_share', { p_share_id: shareId, p_name: 'Meine Kopie von Push A' });
+      expect(imported.error).toBeNull();
+      const { template_id, already_imported } = imported.data![0];
+      expect(already_imported).toBe(false);
+
+      const tpl = await userB.client.from('plan_templates').select('user_id, name').eq('id', template_id).single();
+      expect(tpl.data!.user_id).toBe(userB.id);
+      expect(tpl.data!.name).toBe('Meine Kopie von Push A');
+
+      const items = await userB.client.from('plan_template_items').select('exercise_name, target_sets, target_reps, target_weight_kg').eq('template_id', template_id).order('position');
+      expect(items.data![0]!.target_sets).toBe(3);
+      expect(items.data![0]!.target_reps).toBe(10);
+      expect(items.data![0]!.target_weight_kg).toBeNull(); // stripped: recipient did not opt in to keep it
+
+      // the ORIGINAL author's template is untouched
+      const originalStillIntact = await userA.client.from('plan_template_items').select('target_weight_kg').eq('template_id', templateId).order('position');
+      expect(Number(originalStillIntact.data![0]!.target_weight_kg)).toBe(80);
+    });
+
+    it('76. recipient keeps a shared weight only by explicitly opting in at import time', async () => {
+      const shared = await userA.client.rpc('publish_plan_share', { p_team_id: teamId, p_source_type: 'template', p_source_template_id: templateId, p_share_weights: true });
+      const imported = await userB.client.rpc('import_plan_share', { p_share_id: shared.data![0].share_id, p_name: 'Mit Gewicht', p_keep_weights: true, p_force_new_copy: true });
+      const items = await userB.client.from('plan_template_items').select('target_weight_kg').eq('template_id', imported.data![0].template_id).order('position');
+      expect(Number(items.data![0]!.target_weight_kg)).toBe(80);
+    });
+
+    it('77. a private custom exercise is recreated as a NEW exercise owned by the recipient, not the author\'s id', async () => {
+      const shared = await userA.client.rpc('publish_plan_share', { p_team_id: teamId, p_source_type: 'template', p_source_template_id: templateId });
+      const imported = await userB.client.rpc('import_plan_share', { p_share_id: shared.data![0].share_id, p_force_new_copy: true });
+      const items = await userB.client.from('plan_template_items').select('exercise_id, exercise_name').eq('template_id', imported.data![0].template_id).order('position');
+      const recreated = items.data!.find((i) => i.exercise_name === 'Geheime Übung von A')!;
+      expect(recreated.exercise_id).not.toBe(customExerciseId);
+      const newExercise = await userB.client.from('exercises').select('owner_user_id, is_custom, visibility, muscle_group').eq('id', recreated.exercise_id).single();
+      expect(newExercise.data!.owner_user_id).toBe(userB.id);
+      expect(newExercise.data!.is_custom).toBe(true);
+      expect(newExercise.data!.muscle_group).toBe('back');
+      // A still cannot read B's newly-created private exercise, and vice versa was already true for the original.
+      expect((await userA.client.from('exercises').select('id').eq('id', recreated.exercise_id)).data).toEqual([]);
+    });
+
+    it('78. editing the imported day/template affects neither the share snapshot, the author\'s template, nor another recipient\'s copy', async () => {
+      const shared = await userA.client.rpc('publish_plan_share', { p_team_id: teamId, p_source_type: 'template', p_source_template_id: templateId });
+      const shareId = shared.data![0].share_id as string;
+      const bCopy = await userB.client.rpc('import_plan_share', { p_share_id: shareId, p_force_new_copy: true });
+      const outsiderInTeam = userA; // reuse as a stand-in for "another recipient" via a second forced copy
+      const secondCopy = await outsiderInTeam.client.rpc('import_plan_share', { p_share_id: shareId, p_force_new_copy: true });
+
+      await userB.client.from('plan_template_items').delete().eq('template_id', bCopy.data![0].template_id);
+      await userB.client.from('plan_templates').update({ name: 'Komplett verändert' }).eq('id', bCopy.data![0].template_id);
+
+      const itemsStillOnShare = await admin.from('plan_share_items').select('id').eq('share_id', shareId);
+      expect(itemsStillOnShare.data!.length).toBeGreaterThan(0);
+      const originalTemplateName = await admin.from('plan_templates').select('name').eq('id', templateId).single();
+      expect(originalTemplateName.data!.name).toBe('Push A');
+      const secondCopyItems = await admin.from('plan_template_items').select('id').eq('template_id', secondCopy.data![0].template_id);
+      expect(secondCopyItems.data!.length).toBeGreaterThan(0);
+    });
+
+    it('79. sharing a completed workout uses PLANNED targets only (never the logged/actual set values) and creates no score events', async () => {
+      const before = await admin.from('fitness_score_events').select('id', { count: 'exact', head: true }).eq('user_id', userA.id);
+      const res = await userA.client.rpc('publish_plan_share', { p_team_id: teamId, p_source_type: 'workout', p_source_workout_id: workoutId, p_share_weights: true, p_share_actual_summary: true });
+      expect(res.error).toBeNull();
+      const after = await admin.from('fitness_score_events').select('id', { count: 'exact', head: true }).eq('user_id', userA.id);
+      expect(after.count).toBe(before.count);
+
+      const items = await admin.from('plan_share_items').select('target_sets, target_reps, target_weight_kg').eq('share_id', res.data![0].share_id);
+      expect(items.data![0]!.target_sets).toBe(4); // from `planned`, not the logged 1 set / 7 reps / 92.5kg
+      expect(items.data![0]!.target_reps).toBe(8);
+      expect(Number(items.data![0]!.target_weight_kg)).toBe(90);
+
+      const share = await admin.from('plan_shares').select('actual_duration_seconds').eq('id', res.data![0].share_id).single();
+      expect(share.data!.actual_duration_seconds).toBe(1800);
+    });
+
+    it('80. import is idempotent by default; force_new_copy makes an explicit extra copy; deleting the copy allows a fresh save', async () => {
+      const shared = await userA.client.rpc('publish_plan_share', { p_team_id: teamId, p_source_type: 'template', p_source_template_id: templateId });
+      const shareId = shared.data![0].share_id as string;
+
+      const first = await userB.client.rpc('import_plan_share', { p_share_id: shareId });
+      const second = await userB.client.rpc('import_plan_share', { p_share_id: shareId });
+      expect(second.data![0].template_id).toBe(first.data![0].template_id);
+      expect(second.data![0].already_imported).toBe(true);
+
+      const extra = await userB.client.rpc('import_plan_share', { p_share_id: shareId, p_force_new_copy: true });
+      expect(extra.data![0].template_id).not.toBe(first.data![0].template_id);
+
+      // Delete every live copy from this share, then a plain (non-forced) import must create a fresh one again.
+      await userB.client.from('plan_templates').delete().eq('id', first.data![0].template_id);
+      await userB.client.from('plan_templates').delete().eq('id', extra.data![0].template_id);
+      const again = await userB.client.rpc('import_plan_share', { p_share_id: shareId });
+      expect(again.data![0].already_imported).toBe(false);
+      expect(again.data![0].template_id).not.toBe(first.data![0].template_id);
+      expect(again.data![0].template_id).not.toBe(extra.data![0].template_id);
+    });
+
+    it('81. only the author can withdraw a share; once withdrawn, import is refused but a previously saved copy stays intact', async () => {
+      const shared = await userA.client.rpc('publish_plan_share', { p_team_id: teamId, p_source_type: 'template', p_source_template_id: templateId });
+      const shareId = shared.data![0].share_id as string;
+      const savedBefore = await userB.client.rpc('import_plan_share', { p_share_id: shareId, p_force_new_copy: true });
+
+      const forgedWithdraw = await userB.client.rpc('withdraw_plan_share', { p_share_id: shareId });
+      expect(forgedWithdraw.error).not.toBeNull();
+
+      const withdraw = await userA.client.rpc('withdraw_plan_share', { p_share_id: shareId });
+      expect(withdraw.error).toBeNull();
+
+      const afterWithdraw = await userB.client.rpc('import_plan_share', { p_share_id: shareId, p_force_new_copy: true });
+      expect(afterWithdraw.error).not.toBeNull();
+
+      const stillOwned = await userB.client.from('plan_templates').select('id').eq('id', savedBefore.data![0].template_id).single();
+      expect(stillOwned.data!.id).toBe(savedBefore.data![0].template_id);
+    });
+
+    it('82. a member removed from the team can no longer read a share they had a direct link to', async () => {
+      const leaving = await createTestUser('leaving-member');
+      await admin.from('team_members').insert({ team_id: teamId, user_id: leaving.id, role: 'member' });
+      const shared = await userA.client.rpc('publish_plan_share', { p_team_id: teamId, p_source_type: 'template', p_source_template_id: templateId });
+      const shareId = shared.data![0].share_id as string;
+
+      const whileMember = await leaving.client.from('plan_shares').select('id').eq('id', shareId);
+      expect(whileMember.data).toHaveLength(1);
+
+      await admin.from('team_members').delete().eq('team_id', teamId).eq('user_id', leaving.id);
+      const afterRemoval = await leaving.client.from('plan_shares').select('id').eq('id', shareId);
+      expect(afterRemoval.data).toEqual([]);
+      const importAttempt = await leaving.client.rpc('import_plan_share', { p_share_id: shareId });
+      expect(importAttempt.error).not.toBeNull();
+
+      await admin.auth.admin.deleteUser(leaving.id).catch(() => undefined);
+    });
+  });
 });

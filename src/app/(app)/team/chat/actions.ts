@@ -13,6 +13,7 @@ import { resolveAuthorName } from '@/lib/chat-identity';
 import { stripMarkdown } from '@/lib/chat-format';
 import { fetchCreators } from '@/lib/creator';
 import { getEventSocial, getMessageMentions, getMessagesPage, getQuotes, type ChatMessage } from '@/lib/data/chat';
+import { getPlanSharesForViewer, type PlanShareForViewer } from '@/lib/data/plan-shares';
 import type { QuoteInfo } from '@/lib/chat-quote';
 import type { EventSocial } from '@/lib/event-social';
 import type { Message } from '@/types/database';
@@ -95,19 +96,23 @@ export type OlderMessagesResult = {
   mentions: Record<string, MessageMention[]>;
   social: Record<string, EventSocial>;
   quotes: Record<string, QuoteInfo>;
+  shares: Record<string, PlanShareForViewer>;
 };
 
 /** Older history for "Ältere Nachrichten laden" (RLS still scopes it to the caller's teams). */
 export async function loadOlderMessagesAction(teamId: string, before: string): Promise<OlderMessagesResult> {
-  await requireAuthUser();
-  if (!/^[0-9a-f-]{36}$/i.test(teamId) || Number.isNaN(Date.parse(before))) return { messages: [], hasMore: false, mentions: {}, social: {}, quotes: {} };
+  const user = await requireAuthUser();
+  if (!/^[0-9a-f-]{36}$/i.test(teamId) || Number.isNaN(Date.parse(before))) {
+    return { messages: [], hasMore: false, mentions: {}, social: {}, quotes: {}, shares: {} };
+  }
   const { messages, hasMore } = await getMessagesPage(teamId, { before });
-  const [mentions, social, quotes] = await Promise.all([
+  const [mentions, social, quotes, shares] = await Promise.all([
     getMessageMentions(messages.filter((m) => m.message_type !== 'system').map((m) => m.id)),
     getEventSocial(messages.filter((m) => m.message_type === 'system').map((m) => m.id)),
     getQuotes(messages),
+    getPlanSharesForViewer(messages.map((m) => m.id), user.id),
   ]);
-  return { messages, hasMore, mentions, social, quotes };
+  return { messages, hasMore, mentions, social, quotes, shares };
 }
 
 export type SendImageResult = { ok: true } | { ok: false; error: string };

@@ -5,6 +5,8 @@ import { getOrCreateActivePlan, getPlanDay, getExerciseCatalogue } from '@/lib/d
 import { saveDayAction, removeExerciseFromDayAction, deleteDayAction } from '../../actions';
 import { AddPlanExerciseForm } from '@/components/plan/AddPlanExerciseForm';
 import { SaveAsTemplateButton } from '@/components/plan/SaveAsTemplateButton';
+import { ShareToTeamChatButton } from '@/components/sharing/ShareToTeamChatButton';
+import type { SharePreviewSource } from '@/components/sharing/SharePreviewSheet';
 import { exerciseTypeLabel, muscleGroupLabel } from '@/lib/exercise-types';
 import { formatTargets, targetsFromRow } from '@/lib/plan-targets';
 import { defaultTemplateName } from '@/lib/plan-templates';
@@ -93,10 +95,21 @@ export default async function PlanDayPage({
           </section>
 
           {day && day.exercises.length > 0 && (
-            <SaveAsTemplateButton
-              weekday={weekday}
-              suggestedName={day.title || defaultTemplateName(day.exercises.map((pe) => pe.exercise.muscle_group))}
-            />
+            <div className="flex flex-wrap gap-2">
+              <SaveAsTemplateButton
+                weekday={weekday}
+                suggestedName={day.title || defaultTemplateName(day.exercises.map((pe) => pe.exercise.muscle_group))}
+              />
+              <ShareToTeamChatButton
+                teamId={membership?.team_id ?? null}
+                source={{
+                  sourceType: 'template',
+                  sourcePlanDayId: day.id,
+                  defaultTitle: day.title || defaultTemplateName(day.exercises.map((pe) => pe.exercise.muscle_group)),
+                  items: day.exercises.map((pe) => ({ name: pe.exercise.name, hasWeight: pe.target_weight_kg != null, hasInstructions: !!pe.exercise.instructions })),
+                } satisfies SharePreviewSource}
+              />
+            </div>
           )}
 
           <AddPlanExerciseForm

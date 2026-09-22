@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { ChevronRight, Moon, Plus, Dumbbell } from 'lucide-react';
-import { requireAuthUser } from '@/lib/data/profile';
+import { requireAuthUser, getPrimaryTeamMembership } from '@/lib/data/profile';
 import { getOrCreateActivePlan, getPlanDays } from '@/lib/data/plan';
 import { getTemplates } from '@/lib/data/plan-templates';
 import { TemplatesSection, type DayStatus } from '@/components/plan/TemplatesSection';
@@ -12,7 +12,7 @@ const todayWeekday = ((new Date().getDay() + 6) % 7) + 1;
 export default async function PlanPage() {
   const user = await requireAuthUser();
   const plan = await getOrCreateActivePlan(user.id);
-  const [days, templates] = await Promise.all([getPlanDays(plan.id), getTemplates(user.id)]);
+  const [days, templates, membership] = await Promise.all([getPlanDays(plan.id), getTemplates(user.id), getPrimaryTeamMembership(user.id)]);
   const dayByWeekday = new Map(days.map((d) => [d.weekday, d]));
 
   const dayStatuses: DayStatus[] = WEEKDAYS.map((weekday) => {
@@ -68,7 +68,7 @@ export default async function PlanPage() {
         })}
       </div>
 
-      <TemplatesSection templates={templates} dayStatuses={dayStatuses} />
+      <TemplatesSection templates={templates} dayStatuses={dayStatuses} teamId={membership?.team_id ?? null} />
     </div>
   );
 }
