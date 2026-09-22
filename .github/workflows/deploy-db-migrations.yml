@@ -1,0 +1,37 @@
+name: Deploy DB migrations to production
+
+# Deliberately manual (workflow_dispatch only, no automatic trigger): applying
+# a migration to the production database is a one-way, human-approved action,
+# same as this project's standing rule that nothing deploys to production
+# without explicit approval. Use this after merging a PR that the "Check
+# production migration drift" workflow flagged as out of sync — click "Run
+# workflow" on the main branch in the Actions tab.
+on:
+  workflow_dispatch: {}
+
+jobs:
+  push-migrations:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Link production project
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: supabase link --project-ref hlkihcerghatdckkqtza
+
+      - name: Push pending migrations
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: supabase db push --linked --yes
+
+      - name: Confirm production is now in sync
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: supabase migration list --linked

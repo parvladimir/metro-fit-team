@@ -1,0 +1,51 @@
+name: Check production migration drift
+
+# Catches exactly the failure mode that shipped twice: a PR merges and Vercel
+# deploys the new code, but nobody remembers to also apply the matching
+# Supabase migration(s) to production, so a brand-new feature's tables/RPCs
+# don't exist there. This workflow only ever READS production's migration
+# history (`supabase migration list`) — it never writes to the database. See
+# deploy-db-migrations.yml for the human-triggered fix.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'supabase/migrations/**'
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/migrations/**'
+  workflow_dispatch: {}
+
+jobs:
+  check-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Link production project (read-only)
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: supabase link --project-ref hlkihcerghatdckkqtza
+
+      - name: Compare local migrations against production
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          RAW=$(supabase migration list --linked)
+          echo "$RAW"
+          JSON=$(echo "$RAW" | grep '^{')
+          MISSING=$(echo "$JSON" | jq -r '.migrations[] | select(.remote == "") | .local')
+          if [ -n "$MISSING" ]; then
+            echo "::error::These migrations exist in this branch but are NOT applied to production yet:"
+            echo "$MISSING" | while read -r v; do echo "::error::  - $v"; done
+            echo ""
+            echo "Run the 'Deploy DB migrations to production' workflow (Actions tab → workflow_dispatch) after merging, or run 'npx supabase db push --linked' yourself."
+            exit 1
+          fi
+          echo "Production is in sync with this branch's migrations."
