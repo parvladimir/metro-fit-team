@@ -1057,4 +1057,112 @@ describeIntegration('Row Level Security', () => {
       await admin.from('challenges').delete().eq('id', ch!.id);
     });
   });
+
+  describe('Plan-Vorlagen (plan_templates)', () => {
+    let T: typeof userB;
+    let globalExerciseId: string;
+    let customExerciseId: string;
+
+    beforeAll(async () => {
+      T = await createTestUser('template-owner');
+      const { data: ex } = await admin.from('exercises').select('id').is('team_id', null).limit(1).single();
+      globalExerciseId = ex!.id;
+      const { data: custom, error } = await T.client
+        .from('exercises')
+        .insert({ name: 'Meine Test-Übung', muscle_group: 'chest', exercise_type: 'strength', owner_user_id: T.id, is_custom: true, visibility: 'private', created_by: T.id })
+        .select('id')
+        .single();
+      expect(error).toBeNull();
+      customExerciseId = custom!.id;
+    });
+    afterAll(async () => {
+      await admin.auth.admin.deleteUser(T.id).catch(() => undefined);
+    });
+
+    it('64. owner creates a template with typed targets; items read back in position order; invalid targets are rejected', async () => {
+      const tpl = await T.client.from('plan_templates').insert({ user_id: T.id, name: 'Brust & Trizeps' }).select('id').single();
+      expect(tpl.error).toBeNull();
+      const items = await T.client.from('plan_template_items').insert([
+        { template_id: tpl.data!.id, exercise_id: globalExerciseId, exercise_name: 'Bankdrücken', position: 0, target_sets: 3, target_reps: 10, target_weight_kg: 60 },
+        { template_id: tpl.data!.id, exercise_id: customExerciseId, exercise_name: 'Meine Test-Übung', position: 1, target_sets: 3, target_reps: 12 },
+      ]).select('id');
+      expect(items.error).toBeNull();
+
+      const read = await T.client.from('plan_templates').select('*, plan_template_items(*)').eq('id', tpl.data!.id).single();
+      const sorted = [...read.data!.plan_template_items].sort((a: { position: number }, b: { position: number }) => a.position - b.position);
+      expect(sorted).toHaveLength(2);
+      expect(sorted[0].exercise_name).toBe('Bankdrücken');
+      expect(Number(sorted[0].target_weight_kg)).toBe(60);
+
+      const bad = await T.client.from('plan_template_items').insert({ template_id: tpl.data!.id, exercise_id: globalExerciseId, exercise_name: 'X', position: 2, target_weight_kg: -1 });
+      expect(bad.error).not.toBeNull();
+      const longName = await T.client.from('plan_templates').insert({ user_id: T.id, name: 'x'.repeat(61) });
+      expect(longName.error).not.toBeNull();
+    });
+
+    it('65. outsider cannot read, rename, delete or inject items into another user\'s template (crafted requests)', async () => {
+      const tpl = await T.client.from('plan_templates').insert({ user_id: T.id, name: 'Privat' }).select('id').single();
+      const item = await T.client.from('plan_template_items').insert({ template_id: tpl.data!.id, exercise_id: globalExerciseId, exercise_name: 'X', position: 0 }).select('id').single();
+
+      expect((await outsider.client.from('plan_templates').select('id').eq('id', tpl.data!.id)).data).toEqual([]);
+      expect((await outsider.client.from('plan_template_items').select('id').eq('id', item.data!.id)).data).toEqual([]);
+
+      const forgeRename = await outsider.client.from('plan_templates').update({ name: 'Gehackt' }).eq('id', tpl.data!.id).select('id');
+      expect(forgeRename.data ?? []).toEqual([]);
+      const forgeDelete = await outsider.client.from('plan_templates').delete().eq('id', tpl.data!.id).select('id');
+      expect(forgeDelete.data ?? []).toEqual([]);
+      const forgeItemInsert = await outsider.client.from('plan_template_items').insert({ template_id: tpl.data!.id, exercise_id: globalExerciseId, exercise_name: 'Injiziert', position: 1 });
+      expect(forgeItemInsert.error).not.toBeNull();
+
+      const stillThere = await admin.from('plan_templates').select('name').eq('id', tpl.data!.id).single();
+      expect(stillThere.data!.name).toBe('Privat');
+    });
+
+    it('66. deleting a template cascades to its items', async () => {
+      const tpl = await T.client.from('plan_templates').insert({ user_id: T.id, name: 'Wird gelöscht' }).select('id').single();
+      const item = await T.client.from('plan_template_items').insert({ template_id: tpl.data!.id, exercise_id: globalExerciseId, exercise_name: 'X', position: 0 }).select('id').single();
+
+      await T.client.from('plan_templates').delete().eq('id', tpl.data!.id);
+
+      const orphan = await admin.from('plan_template_items').select('id').eq('id', item.data!.id);
+      expect(orphan.data).toEqual([]);
+    });
+
+    it('67. deleting the referenced exercise never blocks the delete: the item survives with exercise_id null and its name snapshot intact', async () => {
+      const tpl = await T.client.from('plan_templates').insert({ user_id: T.id, name: 'Mit gelöschter Übung' }).select('id').single();
+      const item = await T.client
+        .from('plan_template_items')
+        .insert({ template_id: tpl.data!.id, exercise_id: customExerciseId, exercise_name: 'Meine Test-Übung', position: 0 })
+        .select('id')
+        .single();
+
+      const del = await T.client.from('exercises').delete().eq('id', customExerciseId);
+      expect(del.error).toBeNull();
+
+      const after = await admin.from('plan_template_items').select('exercise_id, exercise_name').eq('id', item.data!.id).single();
+      expect(after.data!.exercise_id).toBeNull();
+      expect(after.data!.exercise_name).toBe('Meine Test-Übung');
+    });
+
+    it('68. a day created "from a template" is an independent copy: deleting the template afterwards leaves it untouched', async () => {
+      const plan = await T.client.from('workout_plans').insert({ user_id: T.id, name: 'T68' }).select('id').single();
+      const tpl = await T.client.from('plan_templates').insert({ user_id: T.id, name: 'Quelle' }).select('id').single();
+      await T.client.from('plan_template_items').insert({ template_id: tpl.data!.id, exercise_id: globalExerciseId, exercise_name: 'X', position: 0, target_sets: 5, target_reps: 5 });
+
+      // Same shape createDayFromTemplateAction writes: a fresh day + a fresh
+      // workout_plan_exercises row, with no FK back to the template.
+      const day = await T.client.from('workout_plan_days').insert({ plan_id: plan.data!.id, weekday: 3, title: 'Quelle' }).select('id').single();
+      const created = await T.client
+        .from('workout_plan_exercises')
+        .insert({ plan_day_id: day.data!.id, exercise_id: globalExerciseId, position: 0, target_sets: 5, target_reps: 5 })
+        .select('id')
+        .single();
+      expect(created.error).toBeNull();
+
+      await T.client.from('plan_templates').delete().eq('id', tpl.data!.id);
+
+      const stillThere = await admin.from('workout_plan_exercises').select('id, target_sets').eq('id', created.data!.id).single();
+      expect(stillThere.data!.target_sets).toBe(5);
+    });
+  });
 });

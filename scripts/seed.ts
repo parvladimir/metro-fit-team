@@ -6,7 +6,7 @@
  * Usage: npm run seed
  */
 import { randomBytes } from 'node:crypto';
-import { getAdminClient, getEnv, slugify } from './lib';
+import { assertSafeSeedTarget, getAdminClient, getEnv, slugify } from './lib';
 
 const DEMO_MEMBERS = [
   { name: 'Vladimir', email: 'vladimir@demo.metro-fit-team.local', goal: 'build_muscle', weeklyGoal: 4 },
@@ -38,8 +38,13 @@ function startOfIsoWeek(): Date {
   return monday;
 }
 
-async function ensureUser(admin: ReturnType<typeof getAdminClient>, email: string, fullName: string) {
-  const password = randomPassword();
+async function ensureUser(
+  admin: ReturnType<typeof getAdminClient>,
+  email: string,
+  fullName: string,
+  configuredPassword: string | null
+) {
+  const password = configuredPassword || randomPassword();
   const { data, error } = await admin.auth.admin.createUser({
     email,
     password,
@@ -55,21 +60,34 @@ async function ensureUser(admin: ReturnType<typeof getAdminClient>, email: strin
     const { data: list, error: listError } = await admin.auth.admin.listUsers({ page, perPage: 200 });
     if (listError) throw listError;
     const match = list.users.find((u) => u.email?.toLowerCase() === email.toLowerCase());
-    if (match) return { id: match.id, password: null, created: false };
+    if (match) {
+      // A configured password is deliberately limited to local/disposable DEV
+      // by assertSafeSeedTarget(). Keeping it stable makes repeated setup runs
+      // usable by browser agents without leaving stale unknown credentials.
+      if (configuredPassword) {
+        const { error: updateError } = await admin.auth.admin.updateUserById(match.id, {
+          password: configuredPassword,
+          user_metadata: { ...match.user_metadata, full_name: fullName },
+        });
+        if (updateError) throw updateError;
+      }
+      return { id: match.id, password: configuredPassword, created: false };
+    }
     if (list.users.length < 200) throw new Error(`Could not find or create user ${email}`);
     page += 1;
   }
 }
 
 async function main() {
+  assertSafeSeedTarget();
   const admin = getAdminClient();
-  const { initialAdminEmail, initialTeamName } = getEnv();
+  const { initialAdminEmail, initialTeamName, demoUserPassword } = getEnv();
 
   if (!initialAdminEmail) throw new Error('INITIAL_ADMIN_EMAIL must be set before seeding.');
 
   console.log(`Seeding demo team "${initialTeamName}"...`);
 
-  const thorsten = await ensureUser(admin, initialAdminEmail, 'Thorsten Roloff');
+  const thorsten = await ensureUser(admin, initialAdminEmail, 'Thorsten Roloff', demoUserPassword);
   const slug = slugify(initialTeamName);
 
   const { data: existingTeam } = await admin.from('teams').select('id').eq('slug', slug).maybeSingle();
@@ -98,7 +116,7 @@ async function main() {
   const memberIds: { id: string; name: string }[] = [{ id: thorsten.id, name: 'Thorsten Roloff' }];
 
   for (const member of DEMO_MEMBERS) {
-    const user = await ensureUser(admin, member.email, member.name);
+    const user = await ensureUser(admin, member.email, member.name, demoUserPassword);
     const { error: membershipError } = await admin
       .from('team_members')
       .upsert({ team_id: teamId, user_id: user.id, role: 'member' }, { onConflict: 'team_id,user_id' });
@@ -114,6 +132,17 @@ async function main() {
       .eq('id', user.id);
     credentials.push({ name: member.name, email: member.email, password: user.password });
     memberIds.push({ id: user.id, name: member.name });
+  }
+
+  // The production creator UUID does not exist in a fresh local Auth stack.
+  // Mark the disposable Vladimir account instead so the creator badge remains
+  // testable without copying a production identity into local development.
+  const localCreator = memberIds.find((member) => member.name === 'Vladimir');
+  if (localCreator) {
+    const { error: creatorError } = await admin
+      .from('platform_creators')
+      .upsert({ user_id: localCreator.id, display_name: 'Volodymyr Parashchak' }, { onConflict: 'user_id' });
+    if (creatorError) throw new Error(`Failed to seed local platform creator: ${creatorError.message}`);
   }
 
   // ---- exercise lookups (seeded via supabase/seed.sql) ---------------------

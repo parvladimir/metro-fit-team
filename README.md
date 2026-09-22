@@ -122,10 +122,16 @@ npm run bootstrap:admin
 
 ```bash
 npm install
+npm run dev:setup
 npm run dev
 ```
 
 Open `http://localhost:3000`.
+
+`npm run dev:setup` is the recommended safe setup for coding agents and local
+testing. It starts an isolated Supabase stack in Docker, backs up an existing
+`.env.local`, writes local-only credentials, resets the local database, and
+creates disposable demo data. See [docs/LOCAL_AGENT_DEVELOPMENT.md](docs/LOCAL_AGENT_DEVELOPMENT.md).
 
 ### 7. Deploy to Vercel
 

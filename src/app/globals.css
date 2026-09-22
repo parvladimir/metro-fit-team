@@ -89,6 +89,7 @@ body {
   .accent-gold { --card-rgb: var(--accent-achievement-rgb); }
   .accent-success { --card-rgb: var(--accent-success-rgb); }
   .accent-primary { --card-rgb: var(--accent-primary-rgb); }
+  .accent-warning { --card-rgb: var(--accent-warning-rgb); }
 
   /* Round icon container tinted with one accent (set via .accent-* on it or a parent). */
   .icon-chip {
