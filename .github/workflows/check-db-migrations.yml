@@ -37,7 +37,11 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: |
           set -euo pipefail
-          RAW=$(supabase migration list --linked)
+          # --output-format json is required explicitly: without it this CLI
+          # renders a human-readable markdown table on some runners (observed
+          # in GitHub Actions) instead of JSON, even though a local terminal
+          # may default to JSON already — never rely on the ambient default.
+          RAW=$(supabase --output-format json migration list --linked)
           echo "$RAW"
           JSON=$(echo "$RAW" | grep '^{')
           MISSING=$(echo "$JSON" | jq -r '.migrations[] | select(.remote == "") | .local')
