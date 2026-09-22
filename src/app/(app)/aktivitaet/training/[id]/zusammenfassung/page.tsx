@@ -5,6 +5,8 @@ import { requireAuthUser } from '@/lib/data/profile';
 import { getWorkoutDetail, calculateVolumeKg } from '@/lib/data/workouts';
 import { formatAchieved, formatTargets, hasTargets } from '@/lib/plan-targets';
 import { WorkoutActionsMenu } from '@/components/workout/WorkoutActionsMenu';
+import { ShareToTeamChatButton } from '@/components/sharing/ShareToTeamChatButton';
+import type { SharePreviewSource } from '@/components/sharing/SharePreviewSheet';
 import { createClient } from '@/lib/supabase/server';
 import { getTeamRankingRules } from '@/lib/data/team';
 import { describeWorkoutPoints } from '@/lib/points-rules';
@@ -26,10 +28,22 @@ export default async function ZusammenfassungPage({ params }: { params: Promise<
 
   const volume = calculateVolumeKg(workout.workoutExercises);
   const minutes = workout.duration_seconds ? Math.round(workout.duration_seconds / 60) : 0;
+  const shareSource: SharePreviewSource = {
+    sourceType: 'workout',
+    sourceWorkoutId: workout.id,
+    defaultTitle: workout.title || t(`activityType.${workout.activity_type}` as const),
+    items: workout.workoutExercises.map((we) => ({
+      name: we.exercise.name,
+      hasWeight: we.planned?.weightKg != null,
+      hasInstructions: !!we.exercise.instructions,
+    })),
+    supportsActualSummary: true,
+  };
 
   return (
     <div className="screen-padding flex flex-col items-center gap-6 pb-8 text-center">
-      <div className="-mb-4 flex w-full justify-end">
+      <div className="-mb-4 flex w-full items-center justify-end gap-2">
+        <ShareToTeamChatButton teamId={workout.team_id} source={shareSource} iconOnly className="btn-icon h-10 w-10 bg-neutral-100 text-neutral-500" />
         <WorkoutActionsMenu workoutId={workout.id} />
       </div>
       <div className="mt-6 flex h-16 w-16 items-center justify-center rounded-full bg-brand-50 text-brand">

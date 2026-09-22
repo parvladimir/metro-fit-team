@@ -13,6 +13,8 @@ import { TEMPLATE_NAME_MAX_LENGTH, hasRemovedExercises, templateExerciseSummary 
 import { formatGermanDateShort } from '@/lib/date';
 import { t, type TranslationKey } from '@/lib/i18n';
 import type { PlanTemplateWithItems } from '@/lib/data/plan-templates';
+import { ShareToTeamChatButton } from '@/components/sharing/ShareToTeamChatButton';
+import type { SharePreviewSource } from '@/components/sharing/SharePreviewSheet';
 
 const WEEKDAYS = [1, 2, 3, 4, 5, 6, 7] as const;
 
@@ -23,7 +25,15 @@ export interface DayStatus {
   exerciseCount: number;
 }
 
-export function TemplatesSection({ templates, dayStatuses }: { templates: PlanTemplateWithItems[]; dayStatuses: DayStatus[] }) {
+export function TemplatesSection({
+  templates,
+  dayStatuses,
+  teamId,
+}: {
+  templates: PlanTemplateWithItems[];
+  dayStatuses: DayStatus[];
+  teamId: string | null;
+}) {
   const [applyTemplate, setApplyTemplate] = useState<PlanTemplateWithItems | null>(null);
   const [renameTarget, setRenameTarget] = useState<PlanTemplateWithItems | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<PlanTemplateWithItems | null>(null);
@@ -52,6 +62,7 @@ export function TemplatesSection({ templates, dayStatuses }: { templates: PlanTe
           <TemplateCard
             key={template.id}
             template={template}
+            teamId={teamId}
             onApply={() => setApplyTemplate(template)}
             onRename={() => setRenameTarget(template)}
             onDelete={() => setDeleteTarget(template)}
@@ -70,11 +81,13 @@ export function TemplatesSection({ templates, dayStatuses }: { templates: PlanTe
 
 function TemplateCard({
   template,
+  teamId,
   onApply,
   onRename,
   onDelete,
 }: {
   template: PlanTemplateWithItems;
+  teamId: string | null;
   onApply: () => void;
   onRename: () => void;
   onDelete: () => void;
@@ -82,6 +95,12 @@ function TemplateCard({
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const summary = templateExerciseSummary(template.items);
+  const shareSource: SharePreviewSource = {
+    sourceType: 'template',
+    sourceTemplateId: template.id,
+    defaultTitle: template.name,
+    items: template.items.map((i) => ({ name: i.exercise_name, hasWeight: i.target_weight_kg != null, hasInstructions: !!i.exercise?.instructions })),
+  };
   const removedExercises = hasRemovedExercises(template.items);
   const dateLabel = template.last_used_at
     ? `Zuletzt genutzt ${formatGermanDateShort(template.last_used_at)}`
@@ -124,6 +143,7 @@ function TemplateCard({
           <button type="button" disabled={pending} onClick={duplicate} aria-label="Vorlage duplizieren" className="btn-icon">
             <Copy size={16} />
           </button>
+          <ShareToTeamChatButton teamId={teamId} source={shareSource} iconOnly className="btn-icon" />
           <button type="button" onClick={onDelete} aria-label="Vorlage löschen" className="btn-icon text-red-400">
             <Trash2 size={16} />
           </button>

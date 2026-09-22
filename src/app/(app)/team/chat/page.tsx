@@ -2,6 +2,8 @@ import { MessageCircle } from 'lucide-react';
 import { BackLink } from '@/components/ui/BackLink';
 import { requireAuthUser, getPrimaryTeamMembership } from '@/lib/data/profile';
 import { getMessagesPage, getChatLastReadAt, getEventSocial, getMentionMembers, getMessageMentions, getQuotes } from '@/lib/data/chat';
+import { getPlanSharesForViewer } from '@/lib/data/plan-shares';
+import { getTemplates } from '@/lib/data/plan-templates';
 import { isValidMessageId } from '@/lib/event-social';
 import { ChatRoom } from '@/components/chat/ChatRoom';
 import { ChatPushPrompt } from '@/components/chat/ChatPushPrompt';
@@ -26,11 +28,13 @@ export default async function ChatPage({ searchParams }: { searchParams: Promise
     getChatLastReadAt(membership.team_id, user.id),
   ]);
 
-  const [social, members, mentions, quotes] = await Promise.all([
+  const [social, members, mentions, quotes, shares, myTemplates] = await Promise.all([
     getEventSocial(messages.filter((m) => m.message_type === 'system').map((m) => m.id)),
     getMentionMembers(membership.team_id, user.id),
     getMessageMentions(messages.filter((m) => m.message_type !== 'system').map((m) => m.id)),
     getQuotes(messages),
+    getPlanSharesForViewer(messages.map((m) => m.id), user.id),
+    getTemplates(user.id),
   ]);
 
   return (
@@ -54,6 +58,8 @@ export default async function ChatPage({ searchParams }: { searchParams: Promise
         initialMentions={mentions}
         initialHasMore={hasMore}
         initialQuotes={quotes}
+        initialShares={shares}
+        myTemplates={myTemplates}
         focusMessageId={isValidMessageId(message) ? message : null}
       />
     </div>
