@@ -146,6 +146,31 @@ export interface WorkoutPlanExercise {
   updated_at: string;
 }
 
+export interface PlanTemplate {
+  id: string;
+  user_id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+  last_used_at: string | null;
+}
+
+export interface PlanTemplateItem {
+  id: string;
+  template_id: string;
+  exercise_id: string | null;
+  exercise_name: string;
+  position: number;
+  target_sets: number | null;
+  target_reps: number | null;
+  target_weight_kg: number | null;
+  target_duration_seconds: number | null;
+  target_distance_km: number | null;
+  target_metrics: { rounds?: number; work_seconds?: number; rest_seconds?: number };
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Workout {
   id: string;
   user_id: string;

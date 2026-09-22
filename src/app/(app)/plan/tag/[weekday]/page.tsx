@@ -4,8 +4,10 @@ import { requireAuthUser, getCurrentProfile, getPrimaryTeamMembership } from '@/
 import { getOrCreateActivePlan, getPlanDay, getExerciseCatalogue } from '@/lib/data/plan';
 import { saveDayAction, removeExerciseFromDayAction, deleteDayAction } from '../../actions';
 import { AddPlanExerciseForm } from '@/components/plan/AddPlanExerciseForm';
+import { SaveAsTemplateButton } from '@/components/plan/SaveAsTemplateButton';
 import { exerciseTypeLabel, muscleGroupLabel } from '@/lib/exercise-types';
 import { formatTargets, targetsFromRow } from '@/lib/plan-targets';
+import { defaultTemplateName } from '@/lib/plan-templates';
 import { t, type TranslationKey } from '@/lib/i18n';
 
 export default async function PlanDayPage({
@@ -89,6 +91,13 @@ export default async function PlanDayPage({
               <p className="text-sm text-neutral-400">{t('plan.noExercises')}</p>
             )}
           </section>
+
+          {day && day.exercises.length > 0 && (
+            <SaveAsTemplateButton
+              weekday={weekday}
+              suggestedName={day.title || defaultTemplateName(day.exercises.map((pe) => pe.exercise.muscle_group))}
+            />
+          )}
 
           <AddPlanExerciseForm
             weekday={weekday}

@@ -2,7 +2,9 @@ import Link from 'next/link';
 import { ChevronRight, Moon, Plus, Dumbbell } from 'lucide-react';
 import { requireAuthUser } from '@/lib/data/profile';
 import { getOrCreateActivePlan, getPlanDays } from '@/lib/data/plan';
-import { t } from '@/lib/i18n';
+import { getTemplates } from '@/lib/data/plan-templates';
+import { TemplatesSection, type DayStatus } from '@/components/plan/TemplatesSection';
+import { t, type TranslationKey } from '@/lib/i18n';
 
 const WEEKDAYS = [1, 2, 3, 4, 5, 6, 7] as const;
 const todayWeekday = ((new Date().getDay() + 6) % 7) + 1;
@@ -10,8 +12,18 @@ const todayWeekday = ((new Date().getDay() + 6) % 7) + 1;
 export default async function PlanPage() {
   const user = await requireAuthUser();
   const plan = await getOrCreateActivePlan(user.id);
-  const days = await getPlanDays(plan.id);
+  const [days, templates] = await Promise.all([getPlanDays(plan.id), getTemplates(user.id)]);
   const dayByWeekday = new Map(days.map((d) => [d.weekday, d]));
+
+  const dayStatuses: DayStatus[] = WEEKDAYS.map((weekday) => {
+    const day = dayByWeekday.get(weekday);
+    return {
+      weekday,
+      label: t(`weekday.${weekday}` as TranslationKey),
+      isRestDay: day?.is_rest_day ?? false,
+      exerciseCount: day?.exercises.length ?? 0,
+    };
+  });
 
   return (
     <div className="screen-padding flex flex-col gap-4 pb-4">
@@ -55,6 +67,8 @@ export default async function PlanPage() {
           );
         })}
       </div>
+
+      <TemplatesSection templates={templates} dayStatuses={dayStatuses} />
     </div>
   );
 }
