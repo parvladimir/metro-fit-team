@@ -29,6 +29,14 @@
   --text-secondary: #aec7c9;
   --text-muted: #73989c;
 
+  /* --- Chat message emphasis (ChatMarkdown) ---
+     Defaults are for light text on a dark surface (received bubbles,
+     Creator cards). The bright cyan outgoing bubble overrides both to a
+     dark navy via an inline style on that message's wrapper — see
+     ChatMarkdown.tsx's tone handling — never edited here. */
+  --chat-strong: #78dce8;
+  --chat-inline-quote: #adc8eb;
+
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
