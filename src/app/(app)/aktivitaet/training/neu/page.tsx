@@ -1,5 +1,6 @@
 import { BackLink } from '@/components/ui/BackLink';
 import { createWorkoutAction } from '../../actions';
+import { SubmitButton } from '@/components/ui/SubmitButton';
 import { t } from '@/lib/i18n';
 import type { ActivityType } from '@/types/database';
 
@@ -39,7 +40,8 @@ export default async function NeuesTrainingPage({ searchParams }: { searchParams
           </div>
         </div>
 
-        <button type="submit" className="btn-primary mt-2">{t('workout.start')}</button>
+        <p className="text-xs text-neutral-400">Der Timer startet, sobald du auf „{t('workout.start')}“ tippst.</p>
+        <SubmitButton className="mt-2">{t('workout.start')}</SubmitButton>
       </form>
     </div>
   );

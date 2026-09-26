@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase/server';
 import { requireAuthUser, getPrimaryTeamMembership } from '@/lib/data/profile';
 import { parseDuration } from '@/lib/workout-metrics';
 import { buildSetEdit, localDateString, shiftByDays, type SetValues } from '@/lib/set-input';
+import { setLocalTimeOfDay } from '@/lib/date';
 import { normalizeExerciseType } from '@/lib/exercise-types';
 import { hasTargets, targetsFromRow } from '@/lib/plan-targets';
 import type { ActivityType, ExerciseType, SetMetrics } from '@/types/database';
@@ -19,6 +20,12 @@ export async function createWorkoutAction(formData: FormData) {
   let title = String(formData.get('title') || '').trim() || null;
   const planDayId = String(formData.get('planDayId') || '') || null;
   const today = new Date().toISOString().slice(0, 10);
+
+  // A running workout already exists for this user: resume it instead of
+  // silently starting a second one (double taps, a stale tab, coming back
+  // from a plan day someone already started training from).
+  const { data: alreadyRunning } = await supabase.from('workouts').select('id').eq('user_id', user.id).eq('status', 'laeuft').maybeSingle();
+  if (alreadyRunning) redirect(`/aktivitaet/training/${alreadyRunning.id}`);
 
   // Starting from a plan day: default the title to the day's title and later
   // copy its exercises into the new workout.
@@ -42,6 +49,14 @@ export async function createWorkoutAction(formData: FormData) {
     .select('id')
     .single();
 
+  // Race-safe backstop for the check above (two near-simultaneous submits):
+  // the unique index on (user_id) where status='laeuft' is the real
+  // enforcement, this just turns the resulting conflict into a normal resume
+  // instead of a thrown error.
+  if (error?.code === '23505') {
+    const { data: raceWinner } = await supabase.from('workouts').select('id').eq('user_id', user.id).eq('status', 'laeuft').maybeSingle();
+    if (raceWinner) redirect(`/aktivitaet/training/${raceWinner.id}`);
+  }
   if (error || !data) throw new Error('Training konnte nicht erstellt werden.');
 
   if (planDayId) {
@@ -197,41 +212,88 @@ export async function deleteSetAction(setId: string, workoutId: string) {
   revalidatePath(`/aktivitaet/training/${workoutId}`);
 }
 
-export async function finishWorkoutAction(formData: FormData) {
-  const workoutId = String(formData.get('workoutId'));
-  const notes = String(formData.get('notes') || '').trim() || null;
-  const distanceRaw = String(formData.get('distanceKm') || '').trim();
+/** Freezes the running timer (pauses it) and sends the user to the review
+ * screen. Because the workout is now paused, the elapsed time it shows stays
+ * frozen no matter how long the review takes — reviewing never adds to
+ * training time. Backing out of the review without saving just leaves the
+ * workout paused, resumable from the running-workout strip or this page. */
+export async function startReviewAction(workoutId: string) {
+  'use server';
+  await requireAuthUser();
+  const supabase = await createClient();
+  const { error } = await supabase.rpc('pause_own_workout', { p_workout_id: workoutId });
+  if (error) throw new Error('Training konnte nicht angehalten werden.');
+  redirect(`/aktivitaet/training/${workoutId}/beenden`);
+}
 
+export async function pauseWorkoutAction(workoutId: string) {
+  'use server';
+  await requireAuthUser();
+  const supabase = await createClient();
+  const { error } = await supabase.rpc('pause_own_workout', { p_workout_id: workoutId });
+  if (error) throw new Error('Pause konnte nicht gespeichert werden.');
+  revalidatePath(`/aktivitaet/training/${workoutId}`);
+  // The running-workout strip lives in the shared app-shell layout, not this
+  // route — its paused_at prop needs the layout itself to refresh too.
+  revalidatePath('/', 'layout');
+}
+
+export async function resumeWorkoutAction(workoutId: string) {
+  'use server';
+  await requireAuthUser();
+  const supabase = await createClient();
+  const { error } = await supabase.rpc('resume_own_workout', { p_workout_id: workoutId });
+  if (error) throw new Error('Training konnte nicht fortgesetzt werden.');
+  revalidatePath(`/aktivitaet/training/${workoutId}`);
+  revalidatePath('/', 'layout');
+}
+
+export type FinishWorkoutState = { error?: string; confirmRequired?: boolean } | undefined;
+
+/** Saves the reviewed, possibly-corrected duration/end time through the
+ * validated finish_own_workout RPC — never a raw update. The server
+ * independently re-enforces the >=180min confirmation requirement regardless
+ * of what the review screen already showed. */
+export async function finishWorkoutAction(_prev: FinishWorkoutState, formData: FormData): Promise<FinishWorkoutState> {
+  const workoutId = String(formData.get('workoutId') || '');
   const user = await requireAuthUser();
   const supabase = await createClient();
 
-  const { data: workout } = await supabase.from('workouts').select('started_at').eq('id', workoutId).single();
-  const startedAt = workout?.started_at ? new Date(workout.started_at) : new Date();
-  const finishedAt = new Date();
-  const durationSeconds = Math.max(1, Math.round((finishedAt.getTime() - startedAt.getTime()) / 1000));
+  const { data: workout } = await supabase.from('workouts').select('paused_at').eq('id', workoutId).eq('user_id', user.id).maybeSingle();
+  if (!workout) return { error: 'Training nicht gefunden.' };
 
-  let distanceKm: number | null = distanceRaw ? Number(distanceRaw) : null;
-  if (distanceKm === null) {
-    const { data: sets } = await supabase
-      .from('workout_sets')
-      .select('distance_km, workout_exercises!inner(workout_id)')
-      .eq('workout_exercises.workout_id', workoutId);
-    const total = (sets ?? []).reduce((sum, r) => sum + Number((r as { distance_km: number | null }).distance_km ?? 0), 0);
-    distanceKm = total > 0 ? Math.round(total * 100) / 100 : null;
+  const durationSeconds = parseDuration(String(formData.get('duration') || ''));
+  if (!durationSeconds || durationSeconds < 1 || durationSeconds > 24 * 3600) {
+    return { error: 'Dauer bitte als mm:ss oder h:mm:ss eingeben.' };
   }
 
-  await supabase
-    .from('workouts')
-    .update({
-      status: 'abgeschlossen',
-      finished_at: finishedAt.toISOString(),
-      duration_seconds: durationSeconds,
-      notes,
-      distance_km: distanceKm,
-    })
-    .eq('id', workoutId)
-    .eq('user_id', user.id);
+  const referenceTime = workout.paused_at ? new Date(workout.paused_at) : new Date();
+  const timeRaw = String(formData.get('finishedAtTime') || '').trim();
+  const finishedAt = timeRaw ? setLocalTimeOfDay(referenceTime, timeRaw) : referenceTime;
+  if (!finishedAt) return { error: 'Bitte eine gültige Uhrzeit angeben.' };
 
+  const distanceRaw = String(formData.get('distanceKm') || '').trim();
+  const distanceKm = distanceRaw ? Number(distanceRaw) : null;
+  const notes = String(formData.get('notes') || '').trim() || null;
+  const confirmLong = formData.get('confirmLong') === 'true';
+
+  const { error } = await supabase.rpc('finish_own_workout', {
+    p_workout_id: workoutId,
+    p_finished_at: finishedAt.toISOString(),
+    p_duration_seconds: durationSeconds,
+    p_distance_km: distanceKm,
+    p_notes: notes,
+    p_confirm_long: confirmLong,
+  });
+
+  if (error) {
+    if (error.message?.includes('confirmation_required')) return { confirmRequired: true };
+    return { error: 'Training konnte nicht gespeichert werden.' };
+  }
+
+  revalidatePath('/aktivitaet');
+  revalidatePath('/team');
+  revalidatePath('/team/chat');
   redirect(`/aktivitaet/training/${workoutId}/zusammenfassung`);
 }
 
@@ -293,7 +355,7 @@ export async function logActivityAction(formData: FormData) {
   redirect('/aktivitaet');
 }
 
-export type EditWorkoutState = { error?: string } | undefined;
+export type EditWorkoutState = { error?: string; confirmRequired?: boolean } | undefined;
 
 /** Edits the caller's own completed workout IN PLACE (same id): workout fields,
  * exercises and sets. Ownership is enforced by RLS on the child rows and by
@@ -372,8 +434,12 @@ export async function updateWorkoutAction(_prev: EditWorkoutState, formData: For
     p_duration_seconds: durationSeconds,
     p_distance_km: distanceKm,
     p_notes: String(formData.get('notes') || '').slice(0, 500),
+    p_confirm_long: formData.get('confirmLong') === 'true',
   });
-  if (error) return { error: 'Training konnte nicht gespeichert werden.' };
+  if (error) {
+    if (error.message?.includes('confirmation_required')) return { confirmRequired: true };
+    return { error: 'Training konnte nicht gespeichert werden.' };
+  }
 
   revalidatePath('/aktivitaet');
   revalidatePath('/team');

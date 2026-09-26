@@ -1,9 +1,11 @@
 import { redirect } from 'next/navigation';
 import { requireAuthUser, getCurrentProfile, getPrimaryTeamMembership } from '@/lib/data/profile';
 import { getUnreadChatCount, getUnreadNotificationCount } from '@/lib/data/chat';
+import { getActiveWorkout } from '@/lib/data/workouts';
 import { NotificationSync } from '@/components/notifications/NotificationSync';
 import { BottomNav } from '@/components/nav/BottomNav';
 import { InstallPrompt } from '@/components/pwa/InstallPrompt';
+import { RunningWorkoutStrip } from '@/components/workout/RunningWorkoutStrip';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await requireAuthUser();
@@ -14,9 +16,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   }
 
   const membership = await getPrimaryTeamMembership(user.id);
-  const [unreadChatCount, notificationCount] = await Promise.all([
+  const [unreadChatCount, notificationCount, activeWorkout] = await Promise.all([
     membership ? getUnreadChatCount(membership.team_id) : Promise.resolve(0),
     getUnreadNotificationCount(user.id),
+    getActiveWorkout(user.id),
   ]);
 
   return (
@@ -24,6 +27,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       <main className="flex min-h-0 flex-1 flex-col pb-6">{children}</main>
       <NotificationSync userId={user.id} initialCount={notificationCount} />
       <InstallPrompt />
+      <RunningWorkoutStrip workout={activeWorkout} />
       <BottomNav teamId={membership?.team_id ?? null} initialUnreadCount={unreadChatCount} />
     </div>
   );

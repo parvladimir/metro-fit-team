@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useFormStatus } from 'react-dom';
-import { CheckCircle2, Dumbbell, ImagePlus, Layers, Loader2, MessageCircle, Play, Target, Trophy, X } from 'lucide-react';
+import { ImagePlus, Layers, Loader2, MessageCircle, X } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { sendMessageAction, sendImageMessageAction, markChatReadAction, loadOlderMessagesAction } from '@/app/(app)/team/chat/actions';
 import { withdrawShareAction } from '@/app/(app)/team/chat/share-actions';
@@ -13,7 +13,8 @@ import { ImportShareDialog } from '@/components/sharing/ImportShareDialog';
 import { SharePickerSheet } from '@/components/sharing/SharePickerSheet';
 import type { PlanShareForViewer, PlanShareWithItems } from '@/lib/data/plan-shares';
 import type { PlanTemplateWithItems } from '@/lib/data/plan-templates';
-import { formatSystemEvent } from '@/lib/chat-events';
+import { SystemEventCard } from '@/components/chat/SystemEventCard';
+import { isSameLocalDay, formatChatDayLabel } from '@/lib/date';
 import { ImageError, prepareChatImage, type PreparedImage } from '@/lib/image-compress';
 import { refreshUnread } from '@/lib/unread-store';
 import { Avatar } from '@/components/ui/Avatar';
@@ -552,9 +553,12 @@ export function ChatRoom({
             <p className="text-sm">{t('chat.empty.title')}</p>
           </div>
         ) : (
-          messages.map((m) => {
+          messages.map((m, i) => {
             const mine = m.user_id === currentUserId;
             const isFormerMember = m.authorName === FORMER_MEMBER_LABEL;
+            const prev = messages[i - 1];
+            const showDateSeparator = !prev || !isSameLocalDay(new Date(prev.created_at), new Date(m.created_at));
+            const dateLabel = showDateSeparator ? <DateSeparator label={formatChatDayLabel(new Date(m.created_at))} /> : null;
 
             if (m.message_type === 'system') {
               return (
@@ -563,6 +567,7 @@ export function ChatRoom({
                   id={`msg-${m.id}`}
                   className={`rounded-2xl transition-shadow duration-500 ${highlightId === m.id ? 'shadow-[0_0_0_2px_rgba(0,215,245,0.55)]' : ''}`}
                 >
+                  {dateLabel}
                   <SystemEventCard message={m} isFirstUnread={m.id === firstUnreadId} label={t('chat.newMessages')} />
                   <EventSocial
                     social={social[m.id] ?? EMPTY_SOCIAL}
@@ -585,6 +590,7 @@ export function ChatRoom({
                   id={`msg-${m.id}`}
                   className={`flex flex-col rounded-2xl transition-shadow duration-500 ${highlightId === m.id ? 'shadow-[0_0_0_2px_rgba(0,215,245,0.55)]' : ''}`}
                 >
+                  {dateLabel}
                   {m.id === firstUnreadId && (
                     <div className="mb-3 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-brand">
                       <span className="h-px flex-1 bg-brand/25" />
@@ -639,6 +645,7 @@ export function ChatRoom({
                   id={`msg-${m.id}`}
                   className={`rounded-2xl transition-shadow duration-500 ${highlightId === m.id ? 'shadow-[0_0_0_2px_rgba(0,215,245,0.55)]' : ''}`}
                 >
+                  {dateLabel}
                   {m.id === firstUnreadId && (
                     <div className="mb-3 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-brand">
                       <span className="h-px flex-1 bg-brand/25" />
@@ -690,6 +697,7 @@ export function ChatRoom({
                 id={`msg-${m.id}`}
                 className={`rounded-2xl transition-shadow duration-500 ${highlightId === m.id ? 'shadow-[0_0_0_2px_rgba(0,215,245,0.55)]' : ''}`}
               >
+                {dateLabel}
                 {m.id === firstUnreadId && (
                   <div className="mb-3 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-brand">
                     <span className="h-px flex-1 bg-brand/25" />
@@ -911,28 +919,12 @@ function SendButton({ label }: { label: string }) {
   );
 }
 
-const EVENT_ICONS = {
-  workout_started: Play,
-  workout_completed: CheckCircle2,
-  weekly_goal_reached: Target,
-  challenge_completed: Trophy,
-} as const;
-
-function SystemEventCard({ message, isFirstUnread, label }: { message: ChatMessage; isFirstUnread: boolean; label: string }) {
-  const Icon = EVENT_ICONS[message.event_type as keyof typeof EVENT_ICONS] ?? Dumbbell;
+/** "Heute" / "Gestern" / "Fr., 25.09.2026" — muted, so it never competes with
+ * the brand-colored "new messages" divider above. */
+function DateSeparator({ label }: { label: string }) {
   return (
-    <>
-      {isFirstUnread && (
-        <div className="mb-3 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-brand">
-          <span className="h-px flex-1 bg-brand/25" />
-          {label}
-          <span className="h-px flex-1 bg-brand/25" />
-        </div>
-      )}
-      <div className="mx-auto flex max-w-[88%] items-center gap-2 rounded-full border border-brand/25 bg-gradient-to-b from-brand/[0.12] to-brand/[0.04] px-3.5 py-1.5 text-center text-xs text-neutral-600 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
-        <Icon size={14} strokeWidth={2} className="shrink-0 text-brand" />
-        <span className="min-w-0 break-words">{formatSystemEvent(message.authorName, message.event_type, message.metadata ?? {})}</span>
-      </div>
-    </>
+    <div className="my-1 flex items-center justify-center">
+      <span className="rounded-full bg-surface-3 px-3 py-1 text-[11px] font-semibold text-neutral-400">{label}</span>
+    </div>
   );
 }

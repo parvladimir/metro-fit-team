@@ -25,6 +25,17 @@ export function formatDuration(totalSeconds: number): string {
   return h > 0 ? `${h}:${mm}:${ss}` : `${m}:${ss}`;
 }
 
+/** Readable German duration for prose (chat events, summaries, confirmation
+ * dialogs) — "45 Min.", "1 Std. 26 Min.". Distinct from formatDuration, which
+ * renders a clock-style "mm:ss"/"h:mm:ss" for a single logged set. */
+export function formatDurationWords(totalSeconds: number): string {
+  const totalMinutes = Math.max(0, Math.round(totalSeconds / 60));
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  if (h <= 0) return `${m} Min.`;
+  return m > 0 ? `${h} Std. ${m} Min.` : `${h} Std.`;
+}
+
 /** Seconds per km, or null when it cannot be computed. */
 export function paceSecondsPerKm(durationSeconds: number | null, distanceKm: number | null): number | null {
   if (!durationSeconds || !distanceKm || durationSeconds <= 0 || distanceKm <= 0) return null;
