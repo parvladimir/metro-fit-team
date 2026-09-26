@@ -10,6 +10,7 @@ import type { SharePreviewSource } from '@/components/sharing/SharePreviewSheet'
 import { createClient } from '@/lib/supabase/server';
 import { getTeamRankingRules } from '@/lib/data/team';
 import { describeWorkoutPoints } from '@/lib/points-rules';
+import { formatDurationWords } from '@/lib/workout-metrics';
 import { t } from '@/lib/i18n';
 
 export default async function ZusammenfassungPage({ params }: { params: Promise<{ id: string }> }) {
@@ -27,7 +28,7 @@ export default async function ZusammenfassungPage({ params }: { params: Promise<
   const workoutPoints = describeWorkoutPoints(pointEvents ?? [], { duration_bonus_threshold_minutes: rules?.duration_bonus_threshold_minutes ?? 30 });
 
   const volume = calculateVolumeKg(workout.workoutExercises);
-  const minutes = workout.duration_seconds ? Math.round(workout.duration_seconds / 60) : 0;
+  const duration = formatDurationWords(workout.duration_seconds ?? 0);
   const shareSource: SharePreviewSource = {
     sourceType: 'workout',
     sourceWorkoutId: workout.id,
@@ -57,8 +58,7 @@ export default async function ZusammenfassungPage({ params }: { params: Promise<
       <div className="grid w-full grid-cols-3 gap-3">
         <div className="card items-center">
           <p className="section-title">{t('workout.summary.duration')}</p>
-          <p className="mt-1 metric-number text-2xl">{minutes}</p>
-          <p className="text-xs text-neutral-400">{t('common.minutes')}</p>
+          <p className="mt-1 metric-number text-xl leading-tight">{duration}</p>
         </div>
         {volume > 0 && (
           <div className="card items-center">

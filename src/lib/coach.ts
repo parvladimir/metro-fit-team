@@ -6,6 +6,8 @@
  * show (own stats, opted-in team feed events, public points/rank).
  */
 
+import { APP_TIMEZONE } from '@/lib/date';
+
 export type CoachAccent = 'spark' | 'success' | 'gold' | 'challenge';
 
 export interface CoachTeamEvent {
@@ -342,7 +344,7 @@ function teamSentence(t: CoachTeamEvent, remaining: number, completed: number, s
 
 /** Wall-clock parts in Europe/Berlin (the team's zone) for server-rendering the greeting. */
 export function berlinWallClock(d: Date = new Date()): { y: number; m: number; day: number; h: number; min: number } {
-  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(d);
+  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: APP_TIMEZONE, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(d);
   const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
   return { y: get('year'), m: get('month'), day: get('day'), h: get('hour') % 24, min: get('minute') };
 }

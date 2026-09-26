@@ -186,6 +186,10 @@ export interface Workout {
   distance_km: number | null;
   notes: string | null;
   source: DataSource;
+  paused_at: string | null;
+  paused_seconds: number;
+  duration_source: 'timer' | 'corrected';
+  long_duration_confirmed_at: string | null;
   created_at: string;
   updated_at: string;
 }

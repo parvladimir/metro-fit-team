@@ -1,6 +1,6 @@
 import 'server-only';
 import { createClient } from '@/lib/supabase/server';
-import { startOfWeek } from '@/lib/date';
+import { startOfWeek, APP_TIMEZONE } from '@/lib/date';
 import { computeStreakDays, detectPersonalRecord, type CoachInput, type CoachTeamEvent, type RecordSet } from '@/lib/coach';
 import { normalizeExerciseType } from '@/lib/exercise-types';
 import type { DashboardData } from '@/lib/data/dashboard';
@@ -22,7 +22,7 @@ const METRIC_UNITS: Record<string, string | null> = {
 };
 
 const firstNameOf = (full: string | null | undefined) => (full ?? '').trim().split(/\s+/)[0] ?? '';
-const berlinDate = (d: Date) => d.toLocaleDateString('sv-SE', { timeZone: 'Europe/Berlin' });
+const berlinDate = (d: Date) => d.toLocaleDateString('sv-SE', { timeZone: APP_TIMEZONE });
 
 /**
  * Everything the coach header needs beyond the dashboard data. All queries run

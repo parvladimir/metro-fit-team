@@ -838,6 +838,188 @@ describeIntegration('Row Level Security', () => {
       await W.client.rpc('delete_own_workout', { p_workout_id: id });
     });
   });
+
+  describe('workout pause, review and finish safety', () => {
+    let T: typeof userB;
+    beforeAll(async () => {
+      T = await createTestUser('timer-owner');
+      await admin.from('team_members').insert({ team_id: teamId, user_id: T.id, role: 'member' });
+    });
+    afterAll(async () => {
+      await admin.auth.admin.deleteUser(T.id).catch(() => undefined);
+    });
+
+    async function startWorkout(user: typeof T, secondsAgo: number, title = 'Timer Test') {
+      const startedAt = new Date(Date.now() - secondsAgo * 1000).toISOString();
+      const { data, error } = await user.client
+        .from('workouts')
+        .insert({ user_id: user.id, team_id: teamId, activity_type: 'krafttraining', status: 'laeuft', title, started_at: startedAt })
+        .select('id')
+        .single();
+      expect(error).toBeNull();
+      return data!.id as string;
+    }
+
+    async function scoreEventsFor(id: string) {
+      const { data } = await admin.from('fitness_score_events').select('event_type').eq('source_entity_id', id);
+      return (data ?? []).map((r) => r.event_type);
+    }
+
+    it('83. pausing and resuming a running workout never re-posts "workout_started" or touches scoring', async () => {
+      const id = await startWorkout(T, 60);
+      expect((await T.client.rpc('pause_own_workout', { p_workout_id: id })).error).toBeNull();
+      expect((await T.client.rpc('resume_own_workout', { p_workout_id: id })).error).toBeNull();
+
+      const { data: events } = await admin.from('messages').select('event_type').eq('workout_id', id).eq('message_type', 'system');
+      expect((events ?? []).map((e) => e.event_type)).toEqual(['workout_started']);
+      expect(await scoreEventsFor(id)).toEqual([]);
+
+      await T.client.rpc('finish_own_workout', { p_workout_id: id, p_finished_at: new Date().toISOString(), p_duration_seconds: 60, p_distance_km: null, p_notes: null });
+    });
+
+    it('84. double-pause and double-resume are harmless no-ops, not errors', async () => {
+      const id = await startWorkout(T, 120);
+      expect((await T.client.rpc('pause_own_workout', { p_workout_id: id })).error).toBeNull();
+      expect((await T.client.rpc('pause_own_workout', { p_workout_id: id })).error).toBeNull();
+      const { data: row1 } = await admin.from('workouts').select('paused_at').eq('id', id).single();
+      const pausedAt = row1!.paused_at;
+
+      expect((await T.client.rpc('resume_own_workout', { p_workout_id: id })).error).toBeNull();
+      const { data: row2 } = await admin.from('workouts').select('paused_seconds, paused_at').eq('id', id).single();
+      expect(row2!.paused_at).toBeNull();
+      const pausedSeconds = row2!.paused_seconds;
+
+      // A second resume (already running) must not add more paused_seconds.
+      expect((await T.client.rpc('resume_own_workout', { p_workout_id: id })).error).toBeNull();
+      const { data: row3 } = await admin.from('workouts').select('paused_seconds').eq('id', id).single();
+      expect(row3!.paused_seconds).toBe(pausedSeconds);
+      expect(pausedAt).not.toBeNull();
+
+      await T.client.rpc('finish_own_workout', { p_workout_id: id, p_finished_at: new Date().toISOString(), p_duration_seconds: 60, p_distance_km: null, p_notes: null });
+    });
+
+    it('85. finishing an already-completed workout again succeeds silently and never double-processes (retry/two-device safety)', async () => {
+      const id = await startWorkout(T, 60);
+      const first = await T.client.rpc('finish_own_workout', { p_workout_id: id, p_finished_at: new Date().toISOString(), p_duration_seconds: 60, p_distance_km: null, p_notes: null });
+      expect(first.error).toBeNull();
+      // Chat-event posting has no daily cap (unlike scoring, which does, and
+      // which earlier tests in this block may have already exhausted for
+      // today) — it's the precise signal that the completion trigger fired
+      // exactly once, independent of that unrelated cap.
+      const { data: eventsAfterFirst } = await admin.from('messages').select('id').eq('workout_id', id).eq('event_type', 'workout_completed');
+      expect(eventsAfterFirst).toHaveLength(1);
+
+      // A retried finish with different (later) numbers must not overwrite the first result or award twice.
+      const second = await T.client.rpc('finish_own_workout', { p_workout_id: id, p_finished_at: new Date().toISOString(), p_duration_seconds: 9999, p_distance_km: null, p_notes: null });
+      expect(second.error).toBeNull();
+
+      const { data: row } = await admin.from('workouts').select('duration_seconds').eq('id', id).single();
+      expect(row!.duration_seconds).toBe(60);
+      const { data: eventsAfterSecond } = await admin.from('messages').select('id').eq('workout_id', id).eq('event_type', 'workout_completed');
+      expect(eventsAfterSecond).toHaveLength(1);
+    });
+
+    it('86. only the owner may pause, resume or finish — a non-owner request is rejected outright', async () => {
+      const id = await startWorkout(T, 60);
+      expect((await outsider.client.rpc('pause_own_workout', { p_workout_id: id })).error).not.toBeNull();
+      expect((await outsider.client.rpc('resume_own_workout', { p_workout_id: id })).error).not.toBeNull();
+      expect((await outsider.client.rpc('finish_own_workout', { p_workout_id: id, p_finished_at: new Date().toISOString(), p_duration_seconds: 60, p_distance_km: null, p_notes: null })).error).not.toBeNull();
+
+      const { data: row } = await admin.from('workouts').select('status, paused_at').eq('id', id).single();
+      expect(row).toMatchObject({ status: 'laeuft', paused_at: null });
+      await T.client.rpc('finish_own_workout', { p_workout_id: id, p_finished_at: new Date().toISOString(), p_duration_seconds: 60, p_distance_km: null, p_notes: null });
+    });
+
+    it('87. a workout under 180 minutes finishes without confirmation; at/above it, confirmation is mandatory and server-enforced', async () => {
+      const shortId = await startWorkout(T, 3600);
+      const shortFinish = await T.client.rpc('finish_own_workout', { p_workout_id: shortId, p_finished_at: new Date().toISOString(), p_duration_seconds: 3600, p_distance_km: null, p_notes: null });
+      expect(shortFinish.error).toBeNull();
+
+      const longId = await startWorkout(T, 12000);
+      const withoutConfirm = await T.client.rpc('finish_own_workout', { p_workout_id: longId, p_finished_at: new Date().toISOString(), p_duration_seconds: 12000, p_distance_km: null, p_notes: null });
+      expect(withoutConfirm.error?.message).toContain('confirmation_required');
+      const { data: stillRunning } = await admin.from('workouts').select('status').eq('id', longId).single();
+      expect(stillRunning!.status).toBe('laeuft');
+
+      const withConfirm = await T.client.rpc('finish_own_workout', {
+        p_workout_id: longId, p_finished_at: new Date().toISOString(), p_duration_seconds: 12000, p_distance_km: null, p_notes: null, p_confirm_long: true,
+      });
+      expect(withConfirm.error).toBeNull();
+      const { data: done } = await admin.from('workouts').select('status, long_duration_confirmed_at').eq('id', longId).single();
+      expect(done!.status).toBe('abgeschlossen');
+      expect(done!.long_duration_confirmed_at).not.toBeNull();
+    });
+
+    it('88. a direct client update can never forge a duration outside the validated finish path (the pre-existing gap this closes)', async () => {
+      const id = await startWorkout(T, 60);
+      // Out-of-bounds duration, straight to completed, bypassing finish_own_workout entirely.
+      const forged = await T.client.from('workouts').update({ status: 'abgeschlossen', finished_at: new Date().toISOString(), duration_seconds: 999999 }).eq('id', id);
+      expect(forged.error).not.toBeNull();
+
+      // Unconfirmed long duration via the same direct path.
+      const forgedLong = await T.client.from('workouts').update({ status: 'abgeschlossen', finished_at: new Date().toISOString(), duration_seconds: 12000 }).eq('id', id);
+      expect(forgedLong.error).not.toBeNull();
+
+      const { data: row } = await admin.from('workouts').select('status').eq('id', id).single();
+      expect(row!.status).toBe('laeuft');
+
+      // The new pause/provenance columns are never directly writable by a client either.
+      const forgedColumn = await T.client.from('workouts').update({ paused_seconds: 99999 }).eq('id', id);
+      expect(forgedColumn.error).not.toBeNull();
+
+      await T.client.rpc('finish_own_workout', { p_workout_id: id, p_finished_at: new Date().toISOString(), p_duration_seconds: 60, p_distance_km: null, p_notes: null });
+    });
+
+    it('89. a user can only ever have one running workout at a time', async () => {
+      const first = await startWorkout(T, 60);
+      const second = await T.client
+        .from('workouts')
+        .insert({ user_id: T.id, team_id: teamId, activity_type: 'laufen', status: 'laeuft', started_at: new Date().toISOString() });
+      expect(second.error?.code).toBe('23505');
+      await T.client.rpc('finish_own_workout', { p_workout_id: first, p_finished_at: new Date().toISOString(), p_duration_seconds: 60, p_distance_km: null, p_notes: null });
+    });
+
+    it('90. review time never inflates the recorded duration: finishing at a still-open pause nets out correctly and keeps duration_source as "timer"', async () => {
+      const id = await startWorkout(T, 600); // started 10 minutes ago
+      expect((await T.client.rpc('pause_own_workout', { p_workout_id: id })).error).toBeNull();
+      // Simulate time passing while the review screen sits open, unpersisted.
+      await new Promise((r) => setTimeout(r, 1100));
+
+      const { data: paused } = await admin.from('workouts').select('paused_at').eq('id', id).single();
+      // The review screen would freeze on ~600s and submit that unchanged, even though real time has moved on.
+      const finish = await T.client.rpc('finish_own_workout', { p_workout_id: id, p_finished_at: paused!.paused_at, p_duration_seconds: 600, p_distance_km: null, p_notes: null });
+      expect(finish.error).toBeNull();
+
+      const { data: row } = await admin.from('workouts').select('duration_source, duration_seconds').eq('id', id).single();
+      expect(row!.duration_seconds).toBe(600);
+      expect(row!.duration_source).toBe('timer');
+    });
+
+    it('91. editing a completed workout to a very long duration also requires confirmation, not only the initial finish', async () => {
+      const id = await startWorkout(T, 60);
+      await T.client.rpc('finish_own_workout', { p_workout_id: id, p_finished_at: new Date().toISOString(), p_duration_seconds: 60, p_distance_km: null, p_notes: null });
+
+      const args = { p_workout_id: id, p_title: 'Timer Test', p_finished_at: new Date().toISOString(), p_duration_seconds: 12000, p_distance_km: null, p_notes: null };
+      const withoutConfirm = await T.client.rpc('update_own_workout', args);
+      expect(withoutConfirm.error?.message).toContain('confirmation_required');
+
+      const withConfirm = await T.client.rpc('update_own_workout', { ...args, p_confirm_long: true });
+      expect(withConfirm.error).toBeNull();
+      const { data: row } = await admin.from('workouts').select('duration_seconds, duration_source, long_duration_confirmed_at').eq('id', id).single();
+      expect(row!.duration_seconds).toBe(12000);
+      expect(row!.duration_source).toBe('corrected');
+      expect(row!.long_duration_confirmed_at).not.toBeNull();
+    });
+
+    it('92. the workout_completed chat event carries its own started_at/duration_source, so the card never needs a private lookup', async () => {
+      const id = await startWorkout(T, 90);
+      await T.client.rpc('finish_own_workout', { p_workout_id: id, p_finished_at: new Date().toISOString(), p_duration_seconds: 90, p_distance_km: null, p_notes: null });
+      const { data: ev } = await admin.from('messages').select('metadata').eq('workout_id', id).eq('event_type', 'workout_completed').single();
+      expect(ev!.metadata).toMatchObject({ duration_minutes: 2, duration_source: 'timer' });
+      expect(typeof ev!.metadata.started_at).toBe('string');
+    });
+  });
+
   describe('@mentions', () => {
     let nameA: string;
     let nameB: string;

@@ -6,6 +6,7 @@ import { getRecentWorkouts } from '@/lib/data/workouts';
 import { getMeasurementHistory } from '@/lib/data/measurements';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { formatGermanDate } from '@/lib/date';
+import { formatDurationWords } from '@/lib/workout-metrics';
 import { t } from '@/lib/i18n';
 
 export default async function AktivitaetPage({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
@@ -81,7 +82,7 @@ async function WorkoutList({ userId }: { userId: string }) {
               {[
                 formatGermanDate(w.scheduled_date),
                 t(`workout.status.${w.status}` as const),
-                w.duration_seconds ? `${Math.round(w.duration_seconds / 60)} Min.` : '',
+                w.duration_seconds ? formatDurationWords(w.duration_seconds) : '',
               ]
                 .filter(Boolean)
                 .join(' · ')}

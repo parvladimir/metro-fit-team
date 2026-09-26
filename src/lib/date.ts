@@ -32,3 +32,75 @@ export function percentChange(current: number, previous: number): number | null 
   if (previous === 0) return current > 0 ? 100 : null;
   return Math.round(((current - previous) / previous) * 100);
 }
+
+/** The team's effective timezone. No per-user/team preference exists in the
+ * schema today — this is the single shared source for what used to be 3
+ * independently hardcoded 'Europe/Berlin' literals (set-input.ts, coach.ts,
+ * data/coach.ts). */
+export const APP_TIMEZONE = 'Europe/Berlin';
+
+const WEEKDAY_ABBR_DE = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa']; // index = Date#getUTCDay(), 0 = Sunday
+
+/** Calendar date (YYYY-MM-DD) of a timestamp in the given timezone. */
+export function localDayKey(d: Date, timeZone: string = APP_TIMEZONE): string {
+  return d.toLocaleDateString('sv-SE', { timeZone });
+}
+
+export function isSameLocalDay(a: Date, b: Date, timeZone: string = APP_TIMEZONE): boolean {
+  return localDayKey(a, timeZone) === localDayKey(b, timeZone);
+}
+
+/** Chat date-separator label: "Heute" / "Gestern" / "Fr., 25.09.2026". Always
+ * timezone-explicit — unlike formatGermanDate above (no `timeZone` option,
+ * pre-existing, can show the wrong calendar day near midnight on a UTC
+ * server), this new helper doesn't repeat that. */
+export function formatChatDayLabel(date: Date, now: Date = new Date(), timeZone: string = APP_TIMEZONE): string {
+  const dayKey = localDayKey(date, timeZone);
+  if (dayKey === localDayKey(now, timeZone)) return 'Heute';
+  if (dayKey === localDayKey(new Date(now.getTime() - 24 * 3600 * 1000), timeZone)) return 'Gestern';
+  const weekday = WEEKDAY_ABBR_DE[new Date(`${dayKey}T00:00:00Z`).getUTCDay()];
+  const [y, m, day] = dayKey.split('-');
+  return `${weekday}., ${day}.${m}.${y}`;
+}
+
+/** HH:MM wall-clock time of a timestamp in the given timezone (for pre-filling
+ * a same-day time-correction input). */
+export function localTimeString(d: Date, timeZone: string = APP_TIMEZONE): string {
+  return d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone });
+}
+
+/** UTC instant for "the same calendar day as `reference`, but at `hhmm`
+ * wall-clock time in `timeZone`". Used for a same-day end-time correction
+ * (e.g. the workout review screen) without needing a full date+time picker.
+ * Returns null for a malformed hhmm. */
+export function setLocalTimeOfDay(reference: Date, hhmm: string, timeZone: string = APP_TIMEZONE): Date | null {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(hhmm.trim());
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (hour > 23 || minute > 59) return null;
+
+  const dayKey = localDayKey(reference, timeZone);
+  const [y, m, day] = dayKey.split('-').map(Number);
+  // Guess the UTC instant by reading the desired wall-clock time as if it
+  // were already UTC, then correct by that guess's actual offset in `timeZone`.
+  const guess = new Date(Date.UTC(y!, m! - 1, day!, hour, minute));
+  const offsetMinutes = timeZoneOffsetMinutes(guess, timeZone);
+  return new Date(guess.getTime() - offsetMinutes * 60000);
+}
+
+function timeZoneOffsetMinutes(instant: Date, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).formatToParts(instant);
+  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
+  const wallClockAsUtc = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'));
+  return (wallClockAsUtc - instant.getTime()) / 60000;
+}

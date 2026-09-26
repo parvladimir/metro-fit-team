@@ -163,6 +163,22 @@ export function WorkoutEditForm({
       <p className="text-xs text-neutral-400">
         Punkte, Ranking, Wochenziel und Herausforderungen werden nach dem Speichern automatisch neu berechnet.
       </p>
+
+      {state?.confirmRequired && (
+        <div className="card flex flex-col gap-3 border-2 border-amber-400/40 bg-amber-400/[0.06] !p-4">
+          <p className="text-sm font-bold text-neutral-900">Die korrigierte Dauer ist sehr lang. Ist das richtig?</p>
+          <p className="text-xs text-neutral-500">Bitte prüfe die Dauer, bevor du sie bestätigst.</p>
+          <div className="flex flex-col gap-2">
+            <label htmlFor="duration" className="btn-secondary w-full cursor-pointer text-center text-sm">
+              Dauer korrigieren
+            </label>
+            <button type="submit" name="confirmLong" value="true" className="btn-ghost w-full text-sm">
+              Ja, Dauer stimmt
+            </button>
+          </div>
+        </div>
+      )}
+
       <FormMessage error={state?.error} />
       <Save />
     </form>

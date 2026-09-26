@@ -4,9 +4,14 @@ import { notFound, redirect } from 'next/navigation';
 import { requireAuthUser, getCurrentProfile, getPrimaryTeamMembership } from '@/lib/data/profile';
 import { getWorkoutDetail, calculateVolumeKg } from '@/lib/data/workouts';
 import { getExerciseCatalogue } from '@/lib/data/plan';
-import { addWorkoutExerciseAction, deleteSetAction, skipWorkoutAction, discardWorkoutAction } from '../../actions';
+import { addWorkoutExerciseAction, deleteSetAction, skipWorkoutAction, startReviewAction } from '../../actions';
 import { PlusCircle } from 'lucide-react';
 import { SetLogger } from '@/components/workout/SetLogger';
+import { WorkoutTimerDisplay } from '@/components/workout/WorkoutTimerDisplay';
+import { PauseResumeButton } from '@/components/workout/PauseResumeButton';
+import { DiscardWorkoutButton } from '@/components/workout/DiscardWorkoutButton';
+import { StaleSessionBanner } from '@/components/workout/StaleSessionBanner';
+import { SubmitButton } from '@/components/ui/SubmitButton';
 import { exerciseTypeLabel } from '@/lib/exercise-types';
 import { summarizeSet } from '@/lib/workout-metrics';
 import { formatTargets, hasTargets } from '@/lib/plan-targets';
@@ -29,15 +34,19 @@ export default async function TrainingDetailPage({ params }: { params: Promise<{
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <BackLink href="/aktivitaet" />
-          <div>
-            <h1 className="text-lg font-bold text-neutral-900">{workout.title || t(`activityType.${workout.activity_type}` as const)}</h1>
-            <p className="text-xs font-semibold text-brand">{t('workout.status.laeuft')}</p>
-          </div>
+          <h1 className="text-lg font-bold text-neutral-900">{workout.title || t(`activityType.${workout.activity_type}` as const)}</h1>
         </div>
-        <form action={discardWorkoutAction.bind(null, workout.id)}>
-          <button type="submit" className="btn-destructive px-3.5 py-2 text-xs">{t('workout.cancel')}</button>
-        </form>
+        <DiscardWorkoutButton workoutId={workout.id} label={t('workout.cancel')} />
       </div>
+
+      <WorkoutTimerDisplay startedAt={workout.started_at!} pausedSeconds={workout.paused_seconds} pausedAt={workout.paused_at} />
+
+      <StaleSessionBanner
+        workoutId={workout.id}
+        startedAt={workout.started_at!}
+        pausedSeconds={workout.paused_seconds}
+        pausedAt={workout.paused_at}
+      />
 
       {volume > 0 && (
         <div className="card flex items-center justify-between">
@@ -117,13 +126,16 @@ export default async function TrainingDetailPage({ params }: { params: Promise<{
       </form>
 
       <div className="fixed left-1/2 z-20 w-full max-w-app -translate-x-1/2 px-4" style={{ bottom: 'calc(5.25rem + env(safe-area-inset-bottom))' }}>
-        <div className="flex gap-2 rounded-2xl border border-white/[0.1] p-2 shadow-lg backdrop-blur-xl" style={{ background: 'linear-gradient(180deg, rgba(31,56,62,0.94), rgba(17,38,43,0.97))' }}>
-          <form action={skipWorkoutAction.bind(null, workout.id)} className="flex-1">
-            <button type="submit" className="btn-secondary w-full">{t('workout.skip')}</button>
-          </form>
-          <Link href={`/aktivitaet/training/${workout.id}/beenden`} className="btn-primary flex-1">
-            {t('workout.finish')}
-          </Link>
+        <div className="flex flex-col gap-2 rounded-2xl border border-white/[0.1] p-2 shadow-lg backdrop-blur-xl" style={{ background: 'linear-gradient(180deg, rgba(31,56,62,0.94), rgba(17,38,43,0.97))' }}>
+          <PauseResumeButton workoutId={workout.id} paused={!!workout.paused_at} className="btn-secondary w-full flex items-center justify-center gap-1.5" />
+          <div className="flex gap-2">
+            <form action={skipWorkoutAction.bind(null, workout.id)} className="flex-1">
+              <button type="submit" className="btn-secondary w-full">{t('workout.skip')}</button>
+            </form>
+            <form action={startReviewAction.bind(null, workout.id)} className="flex-1">
+              <SubmitButton>{t('workout.finish')}</SubmitButton>
+            </form>
+          </div>
         </div>
       </div>
     </div>

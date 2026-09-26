@@ -1,5 +1,6 @@
 import { normalizeExerciseType } from '@/lib/exercise-types';
 import { parseDuration } from '@/lib/workout-metrics';
+import { APP_TIMEZONE } from '@/lib/date';
 import type { ExerciseType, SetMetrics } from '@/types/database';
 
 /** Which editable inputs a logged set has, per exercise type (no irrelevant fields). */
@@ -95,7 +96,7 @@ export function shiftByDays(original: Date, fromDate: string, toDate: string): D
   return new Date(original.getTime() + (b - a));
 }
 
-/** Calendar date (YYYY-MM-DD) of a timestamp as the user sees it (Europe/Berlin). */
+/** Calendar date (YYYY-MM-DD) of a timestamp as the user sees it. */
 export function localDateString(d: Date): string {
-  return d.toLocaleDateString('sv-SE', { timeZone: 'Europe/Berlin' });
+  return d.toLocaleDateString('sv-SE', { timeZone: APP_TIMEZONE });
 }

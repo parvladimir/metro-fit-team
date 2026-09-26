@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatDuration, formatPace, formatSpeed, paceSecondsPerKm, parseDuration, speedKmh, summarizeSet } from './workout-metrics';
+import { formatDuration, formatDurationWords, formatPace, formatSpeed, paceSecondsPerKm, parseDuration, speedKmh, summarizeSet } from './workout-metrics';
 import { prefersPace, usesSetTargets } from './exercise-types';
 
 describe('parseDuration', () => {
@@ -31,6 +31,19 @@ describe('cardio maths', () => {
   it('formats durations', () => {
     expect(formatDuration(2550)).toBe('42:30');
     expect(formatDuration(4500)).toBe('1:15:00');
+  });
+});
+
+describe('formatDurationWords', () => {
+  it('shows minutes only under an hour', () => {
+    expect(formatDurationWords(45 * 60)).toBe('45 Min.');
+  });
+  it('splits into hours and minutes at/above an hour, never a bare oversized minute count', () => {
+    expect(formatDurationWords(86 * 60)).toBe('1 Std. 26 Min.');
+    expect(formatDurationWords(435 * 60)).toBe('7 Std. 15 Min.');
+  });
+  it('omits a zero-minute remainder', () => {
+    expect(formatDurationWords(120 * 60)).toBe('2 Std.');
   });
 });
 
