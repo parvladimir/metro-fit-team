@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  applyReactionChange,
+  applyReactionToggle,
   emojiFor,
   isReactionKey,
   QUICK_REACTIONS,
@@ -28,33 +28,54 @@ describe('allowlist', () => {
   });
 });
 
-describe('applyReactionChange (idempotent per-user merge)', () => {
-  it('setting the same key twice converges to the same state (retry-safe)', () => {
+describe('applyReactionToggle (idempotent per-user, per-key merge)', () => {
+  it('adding the same key twice converges to the same state (retry-safe)', () => {
     let state: ReactionsByUser = {};
-    state = applyReactionChange(state, 'u1', 'fire');
+    state = applyReactionToggle(state, 'u1', 'fire', true);
     const once = state;
-    state = applyReactionChange(state, 'u1', 'fire');
+    state = applyReactionToggle(state, 'u1', 'fire', true);
     expect(state).toEqual(once);
-    expect(state).toEqual({ u1: 'fire' });
+    expect(state).toEqual({ u1: ['fire'] });
   });
-  it('replaces one user’s key without touching others', () => {
-    let state: ReactionsByUser = { u1: 'fire', u2: 'heart' };
-    state = applyReactionChange(state, 'u1', 'muscle');
-    expect(state).toEqual({ u1: 'muscle', u2: 'heart' });
+  it('one user can hold several different keys at once, added one at a time', () => {
+    let state: ReactionsByUser = {};
+    state = applyReactionToggle(state, 'u1', 'thumbs_up', true);
+    state = applyReactionToggle(state, 'u1', 'fire', true);
+    state = applyReactionToggle(state, 'u1', 'muscle', true);
+    expect(state.u1).toEqual(['thumbs_up', 'fire', 'muscle']);
   });
-  it('removing (null) twice is a no-op the second time', () => {
-    let state: ReactionsByUser = { u1: 'fire' };
-    state = applyReactionChange(state, 'u1', null);
+  it('removing one key leaves the user’s other keys and other users untouched', () => {
+    let state: ReactionsByUser = { u1: ['thumbs_up', 'fire', 'muscle'], u2: ['fire'] };
+    state = applyReactionToggle(state, 'u1', 'fire', false);
+    expect(state).toEqual({ u1: ['thumbs_up', 'muscle'], u2: ['fire'] });
+  });
+  it('removing a key twice is a no-op the second time', () => {
+    let state: ReactionsByUser = { u1: ['fire'] };
+    state = applyReactionToggle(state, 'u1', 'fire', false);
     expect(state).toEqual({});
     const empty = state;
-    state = applyReactionChange(state, 'u1', null);
+    state = applyReactionToggle(state, 'u1', 'fire', false);
     expect(state).toBe(empty);
+  });
+  it('removing the last key drops the user entry entirely rather than leaving an empty array', () => {
+    let state: ReactionsByUser = { u1: ['fire'], u2: ['heart'] };
+    state = applyReactionToggle(state, 'u1', 'fire', false);
+    expect(state).toEqual({ u2: ['heart'] });
+    expect('u1' in state).toBe(false);
   });
 });
 
 describe('summarizeReactions', () => {
-  it('counts per key, nonzero only, in allowlist order regardless of insertion order', () => {
-    const state: ReactionsByUser = { u1: 'rocket', u2: 'thumbs_up', u3: 'thumbs_up' };
+  it('counts distinct reactions, not distinct people — one person in two counts is not two people', () => {
+    // Volodymyr: 👍 + 🔥, Tim: 🔥 — matches the task's own worked example.
+    const state: ReactionsByUser = { volodymyr: ['thumbs_up', 'fire'], tim: ['fire'] };
+    expect(summarizeReactions(state)).toEqual([
+      { key: 'thumbs_up', count: 1 },
+      { key: 'fire', count: 2 },
+    ]);
+  });
+  it('nonzero only, in allowlist order regardless of insertion order', () => {
+    const state: ReactionsByUser = { u1: ['rocket'], u2: ['thumbs_up'], u3: ['thumbs_up'] };
     expect(summarizeReactions(state)).toEqual([
       { key: 'thumbs_up', count: 2 },
       { key: 'rocket', count: 1 },

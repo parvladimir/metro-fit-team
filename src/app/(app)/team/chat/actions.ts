@@ -224,21 +224,26 @@ export async function savePushSubscriptionAction(sub: { endpoint: string; p256dh
     .upsert({ user_id: user.id, endpoint: sub.endpoint, p256dh: sub.p256dh, auth: sub.auth }, { onConflict: 'endpoint' });
 }
 
-export type SetReactionResult = { ok: true; status: 'inserted' | 'updated' | 'deleted' | 'noop' } | { ok: false };
+export type SetReactionResult = { ok: true; status: 'added' | 'removed' | 'noop' } | { ok: false };
 
-/** Sets (or clears, with `reactionKey: null`) the caller's own reaction on any
- * top-level, non-deleted message. The caller decides null-vs-a-key from its
- * own displayed state (never "flip whatever's there") — see
- * `set_message_reaction` in 0038 for why that's what makes a retry safe. The
- * RPC alone enforces the target/team-membership/key rules; this action only
- * adds the push decision on top, since that lives in the app layer.
+/** Adds or removes ONE specific emoji for the caller on any top-level,
+ * non-deleted message — independent of whatever other reactions they already
+ * hold on it (a user may have several active at once; this only ever touches
+ * the (message, user, reactionKey) triple named in this call). The caller
+ * always passes the intended end state (`active`) rather than a blind toggle,
+ * so a retried call converges instead of flipping back — see
+ * `set_message_reaction` in 0039. The RPC alone enforces the
+ * target/team-membership/key rules; this action only adds the push decision
+ * on top, since that lives in the app layer.
  *
  * Push-eligibility timing matters: `firstTime` is computed BEFORE the RPC
- * call, exactly like the reaction feature always has. Checking it after would
- * be unable to distinguish a true first reaction from "removed, then
- * re-added" — both leave exactly one notification row, because the DB's
- * dedup index is permanent, not time-windowed. */
-export async function setReactionAction(messageId: string, reactionKey: ReactionKey | null): Promise<SetReactionResult> {
+ * call, exactly like this feature always has. Checking it after would be
+ * unable to distinguish a true first reaction from "removed, then re-added"
+ * — both leave exactly one notification row, because the DB's dedup index is
+ * permanent (keyed by owner/message/actor, not by emoji) and not
+ * time-windowed — so adding a second or third different emoji to the same
+ * message in quick succession can never fire a second push either. */
+export async function setReactionAction(messageId: string, reactionKey: ReactionKey, active: boolean): Promise<SetReactionResult> {
   if (!isValidMessageId(messageId)) return { ok: false };
   const user = await requireAuthUser();
   const supabase = await createClient();
@@ -251,7 +256,7 @@ export async function setReactionAction(messageId: string, reactionKey: Reaction
   if (!event) return { ok: false };
 
   let firstTime = false;
-  if (reactionKey !== null && event.user_id !== user.id) {
+  if (active && event.user_id !== user.id) {
     const { count } = await createAdminClient()
       .from('notifications')
       .select('id', { count: 'exact', head: true })
@@ -262,10 +267,14 @@ export async function setReactionAction(messageId: string, reactionKey: Reaction
     firstTime = (count ?? 0) === 0;
   }
 
-  const { data: status, error } = await supabase.rpc('set_message_reaction', { p_message_id: messageId, p_reaction_key: reactionKey });
+  const { data: status, error } = await supabase.rpc('set_message_reaction', {
+    p_message_id: messageId,
+    p_reaction_key: reactionKey,
+    p_active: active,
+  });
   if (error) return { ok: false };
 
-  if (status === 'inserted' && firstTime && reactionKey) {
+  if (status === 'added' && firstTime) {
     const title = typeof event.metadata?.title === 'string' ? (event.metadata.title as string) : null;
     waitUntil(
       notifyEventOwner({
@@ -279,7 +288,7 @@ export async function setReactionAction(messageId: string, reactionKey: Reaction
       })
     );
   }
-  return { ok: true, status: status as 'inserted' | 'updated' | 'deleted' | 'noop' };
+  return { ok: true, status: status as 'added' | 'removed' | 'noop' };
 }
 
 export interface Reactor {
