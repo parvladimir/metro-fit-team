@@ -5,6 +5,7 @@ import { fetchCreators } from '@/lib/creator';
 import type { EventReply, EventSocial } from '@/lib/event-social';
 import type { MentionMember, MessageMention } from '@/lib/mentions';
 import { quoteFromMessage, type QuoteInfo } from '@/lib/chat-quote';
+import { isReactionKey, type ReactionsByUser } from '@/lib/reactions';
 import type { Message, Profile } from '@/types/database';
 
 export interface ChatMessage extends Message {
@@ -85,25 +86,22 @@ export async function getChatLastReadAt(teamId: string, userId: string): Promise
   return data?.last_read_at ?? null;
 }
 
-/** Reactions + replies for a batch of events in two queries (no N+1). */
-export async function getEventSocial(eventIds: string[]): Promise<Record<string, EventSocial>> {
+/** Reply threads for a batch of activity events (still system-events only —
+ * replies were never generalized to other message types). */
+export async function getEventReplies(eventIds: string[]): Promise<Record<string, EventSocial>> {
   const out: Record<string, EventSocial> = {};
   if (eventIds.length === 0) return out;
-  for (const id of eventIds) out[id] = { reactors: [], replies: [] };
+  for (const id of eventIds) out[id] = { replies: [] };
 
   const supabase = await createClient();
-  const [reactions, replies] = await Promise.all([
-    supabase.from('message_reactions').select('message_id, user_id').in('message_id', eventIds),
-    supabase
-      .from('messages')
-      .select('id, user_id, content, created_at, parent_message_id, profiles(full_name, avatar_url)')
-      .in('parent_message_id', eventIds)
-      .is('deleted_at', null)
-      .order('created_at', { ascending: true }),
-  ]);
+  const { data } = await supabase
+    .from('messages')
+    .select('id, user_id, content, created_at, parent_message_id, profiles(full_name, avatar_url)')
+    .in('parent_message_id', eventIds)
+    .is('deleted_at', null)
+    .order('created_at', { ascending: true });
 
-  for (const r of reactions.data ?? []) out[r.message_id]?.reactors.push(r.user_id);
-  for (const row of replies.data ?? []) {
+  for (const row of data ?? []) {
     const r = row as unknown as { id: string; user_id: string; content: string; created_at: string; parent_message_id: string; profiles: Pick<Profile, 'full_name' | 'avatar_url'> | null };
     const reply: EventReply = {
       id: r.id,
@@ -115,8 +113,24 @@ export async function getEventSocial(eventIds: string[]): Promise<Record<string,
     };
     out[r.parent_message_id]?.replies.push(reply);
   }
-  const replyMentions = await getMessageMentions((replies.data ?? []).map((r) => (r as { id: string }).id));
+  const replyMentions = await getMessageMentions((data ?? []).map((r) => (r as { id: string }).id));
   for (const ev of Object.values(out)) for (const reply of ev.replies) reply.mentions = replyMentions[reply.id] ?? [];
+  return out;
+}
+
+/** Reactions for a batch of top-level messages of ANY type (not just system
+ * events) in one query — a per-message map of userId -> reaction key, which
+ * is what makes insert/replace/remove a single uniform "set this user's
+ * entry" operation on the client. */
+export async function getMessageReactions(messageIds: string[]): Promise<Record<string, ReactionsByUser>> {
+  const out: Record<string, ReactionsByUser> = {};
+  if (messageIds.length === 0) return out;
+  const supabase = await createClient();
+  const { data } = await supabase.from('message_reactions').select('message_id, user_id, reaction_type').in('message_id', messageIds);
+  for (const r of data ?? []) {
+    if (!isReactionKey(r.reaction_type)) continue;
+    (out[r.message_id] ??= {})[r.user_id] = r.reaction_type;
+  }
   return out;
 }
 
@@ -137,7 +151,7 @@ export interface PersonalNotification {
   id: string;
   kind: 'reaction' | 'reply' | 'mention' | null;
   message_id: string | null;
-  params: { actor_name?: string; event_title?: string | null; preview?: string };
+  params: { actor_name?: string; event_title?: string | null; preview?: string; reaction_key?: string; is_workout?: boolean };
   read_at: string | null;
   created_at: string;
 }

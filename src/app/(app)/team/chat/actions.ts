@@ -12,8 +12,9 @@ import { cleanReply, isValidMessageId, type EventReply } from '@/lib/event-socia
 import { resolveAuthorName } from '@/lib/chat-identity';
 import { stripMarkdown } from '@/lib/chat-format';
 import { fetchCreators } from '@/lib/creator';
-import { getEventSocial, getMessageMentions, getMessagesPage, getQuotes, type ChatMessage } from '@/lib/data/chat';
+import { getEventReplies, getMessageReactions, getMessageMentions, getMessagesPage, getQuotes, type ChatMessage } from '@/lib/data/chat';
 import { getPlanSharesForViewer, type PlanShareForViewer } from '@/lib/data/plan-shares';
+import { isReactionKey, type ReactionKey, type ReactionsByUser } from '@/lib/reactions';
 import type { QuoteInfo } from '@/lib/chat-quote';
 import type { EventSocial } from '@/lib/event-social';
 import type { Message } from '@/types/database';
@@ -95,6 +96,7 @@ export type OlderMessagesResult = {
   hasMore: boolean;
   mentions: Record<string, MessageMention[]>;
   social: Record<string, EventSocial>;
+  reactions: Record<string, ReactionsByUser>;
   quotes: Record<string, QuoteInfo>;
   shares: Record<string, PlanShareForViewer>;
 };
@@ -103,16 +105,17 @@ export type OlderMessagesResult = {
 export async function loadOlderMessagesAction(teamId: string, before: string): Promise<OlderMessagesResult> {
   const user = await requireAuthUser();
   if (!/^[0-9a-f-]{36}$/i.test(teamId) || Number.isNaN(Date.parse(before))) {
-    return { messages: [], hasMore: false, mentions: {}, social: {}, quotes: {}, shares: {} };
+    return { messages: [], hasMore: false, mentions: {}, social: {}, reactions: {}, quotes: {}, shares: {} };
   }
   const { messages, hasMore } = await getMessagesPage(teamId, { before });
-  const [mentions, social, quotes, shares] = await Promise.all([
+  const [mentions, social, reactions, quotes, shares] = await Promise.all([
     getMessageMentions(messages.filter((m) => m.message_type !== 'system').map((m) => m.id)),
-    getEventSocial(messages.filter((m) => m.message_type === 'system').map((m) => m.id)),
+    getEventReplies(messages.filter((m) => m.message_type === 'system').map((m) => m.id)),
+    getMessageReactions(messages.map((m) => m.id)),
     getQuotes(messages),
     getPlanSharesForViewer(messages.map((m) => m.id), user.id),
   ]);
-  return { messages, hasMore, mentions, social, quotes, shares };
+  return { messages, hasMore, mentions, social, reactions, quotes, shares };
 }
 
 export type SendImageResult = { ok: true } | { ok: false; error: string };
@@ -221,14 +224,21 @@ export async function savePushSubscriptionAction(sub: { endpoint: string; p256dh
     .upsert({ user_id: user.id, endpoint: sub.endpoint, p256dh: sub.p256dh, auth: sub.auth }, { onConflict: 'endpoint' });
 }
 
-export type SupportResult = { ok: true; reacted: boolean } | { ok: false };
+export type SetReactionResult = { ok: true; status: 'inserted' | 'updated' | 'deleted' | 'noop' } | { ok: false };
 
-/** Toggles the caller's "support" on an activity event. RLS restricts this to
- * current team members acting as themselves. A push goes out only on the
- * transition not-reacted → reacted AND only the first time this person ever
- * supports this event (the DB keeps one notification per owner/event/actor),
- * so toggling repeatedly can never spam the owner. */
-export async function toggleSupportAction(messageId: string): Promise<SupportResult> {
+/** Sets (or clears, with `reactionKey: null`) the caller's own reaction on any
+ * top-level, non-deleted message. The caller decides null-vs-a-key from its
+ * own displayed state (never "flip whatever's there") — see
+ * `set_message_reaction` in 0038 for why that's what makes a retry safe. The
+ * RPC alone enforces the target/team-membership/key rules; this action only
+ * adds the push decision on top, since that lives in the app layer.
+ *
+ * Push-eligibility timing matters: `firstTime` is computed BEFORE the RPC
+ * call, exactly like the reaction feature always has. Checking it after would
+ * be unable to distinguish a true first reaction from "removed, then
+ * re-added" — both leave exactly one notification row, because the DB's
+ * dedup index is permanent, not time-windowed. */
+export async function setReactionAction(messageId: string, reactionKey: ReactionKey | null): Promise<SetReactionResult> {
   if (!isValidMessageId(messageId)) return { ok: false };
   const user = await requireAuthUser();
   const supabase = await createClient();
@@ -238,22 +248,10 @@ export async function toggleSupportAction(messageId: string): Promise<SupportRes
     .select('id, user_id, metadata, message_type')
     .eq('id', messageId)
     .maybeSingle();
-  if (!event || event.message_type !== 'system') return { ok: false };
-
-  const { data: existing } = await supabase
-    .from('message_reactions')
-    .select('id')
-    .eq('message_id', messageId)
-    .eq('user_id', user.id)
-    .maybeSingle();
-
-  if (existing) {
-    const { error } = await supabase.from('message_reactions').delete().eq('id', existing.id);
-    return error ? { ok: false } : { ok: true, reacted: false };
-  }
+  if (!event) return { ok: false };
 
   let firstTime = false;
-  if (event.user_id !== user.id) {
+  if (reactionKey !== null && event.user_id !== user.id) {
     const { count } = await createAdminClient()
       .from('notifications')
       .select('id', { count: 'exact', head: true })
@@ -264,14 +262,57 @@ export async function toggleSupportAction(messageId: string): Promise<SupportRes
     firstTime = (count ?? 0) === 0;
   }
 
-  const { error } = await supabase.from('message_reactions').insert({ message_id: messageId, user_id: user.id });
-  if (error && error.code !== '23505') return { ok: false };
+  const { data: status, error } = await supabase.rpc('set_message_reaction', { p_message_id: messageId, p_reaction_key: reactionKey });
+  if (error) return { ok: false };
 
-  if (!error && firstTime) {
+  if (status === 'inserted' && firstTime && reactionKey) {
     const title = typeof event.metadata?.title === 'string' ? (event.metadata.title as string) : null;
-    waitUntil(notifyEventOwner({ ownerId: event.user_id, actorId: user.id, messageId, kind: 'reaction', eventTitle: title }));
+    waitUntil(
+      notifyEventOwner({
+        ownerId: event.user_id,
+        actorId: user.id,
+        messageId,
+        kind: 'reaction',
+        eventTitle: title,
+        reactionKey,
+        isWorkoutEvent: event.message_type === 'system',
+      })
+    );
   }
-  return { ok: true, reacted: true };
+  return { ok: true, status: status as 'inserted' | 'updated' | 'deleted' | 'noop' };
+}
+
+export interface Reactor {
+  userId: string;
+  reactionKey: ReactionKey;
+  name: string;
+  avatarUrl: string | null;
+}
+
+/** Who reacted, and with what — for the "Reaktionen ansehen" sheet. Fetched
+ * on demand (not preloaded per message). Uses the regular RLS-respecting
+ * client, not the admin client — `message_reactions_select_team` already
+ * permits any team member to read this, and using the admin client here
+ * would silently bypass that team scoping. */
+export async function getMessageReactorsAction(messageId: string): Promise<Reactor[]> {
+  if (!isValidMessageId(messageId)) return [];
+  await requireAuthUser();
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from('message_reactions')
+    .select('user_id, reaction_type, profiles(full_name, avatar_url)')
+    .eq('message_id', messageId);
+  return (data ?? [])
+    .filter((r) => isReactionKey(r.reaction_type))
+    .map((r) => {
+      const profile = (r as unknown as { profiles: { full_name: string | null; avatar_url: string | null } | null }).profiles;
+      return {
+        userId: r.user_id,
+        reactionKey: r.reaction_type as ReactionKey,
+        name: resolveAuthorName(profile),
+        avatarUrl: profile?.avatar_url ?? null,
+      };
+    });
 }
 
 export type EventReplyResult = { ok: true; reply: EventReply } | { ok: false; error: string };
