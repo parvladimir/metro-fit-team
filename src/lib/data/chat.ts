@@ -119,9 +119,8 @@ export async function getEventReplies(eventIds: string[]): Promise<Record<string
 }
 
 /** Reactions for a batch of top-level messages of ANY type (not just system
- * events) in one query — a per-message map of userId -> reaction key, which
- * is what makes insert/replace/remove a single uniform "set this user's
- * entry" operation on the client. */
+ * events) in one query — a per-message map of userId -> every active
+ * reaction key for that user (a user may hold several at once). */
 export async function getMessageReactions(messageIds: string[]): Promise<Record<string, ReactionsByUser>> {
   const out: Record<string, ReactionsByUser> = {};
   if (messageIds.length === 0) return out;
@@ -129,7 +128,8 @@ export async function getMessageReactions(messageIds: string[]): Promise<Record<
   const { data } = await supabase.from('message_reactions').select('message_id, user_id, reaction_type').in('message_id', messageIds);
   for (const r of data ?? []) {
     if (!isReactionKey(r.reaction_type)) continue;
-    (out[r.message_id] ??= {})[r.user_id] = r.reaction_type;
+    const perMessage = (out[r.message_id] ??= {});
+    (perMessage[r.user_id] ??= []).push(r.reaction_type);
   }
   return out;
 }

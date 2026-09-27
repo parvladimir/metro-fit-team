@@ -69,25 +69,31 @@ export function labelFor(key: string | null | undefined): string {
   return (key && REACTION_MAP[key]?.label) || 'Reaktion';
 }
 
-/** Per-message state: which key (if any) each user currently has selected. A
- * sparse map, not a per-key array — this is what makes insert/replace/remove
- * a single uniform "set this user's entry" operation instead of three. */
-export type ReactionsByUser = Record<string, ReactionKey>;
+/** Per-message state: EVERY key each user currently has active — a user may
+ * hold several of the 20 at once, each an independent toggle. No duplicates
+ * within one user's list; order is insignificant (allowlist order is applied
+ * only when rendering, in `summarizeReactions`). */
+export type ReactionsByUser = Record<string, ReactionKey[]>;
 
 export const EMPTY_REACTIONS: ReactionsByUser = {};
 
-/** Idempotent merge: applying the same (userId, key) pair any number of times
- * — from an optimistic update, its own Realtime echo, or a stale duplicate
- * event — converges to the same state instead of double-counting. */
-export function applyReactionChange(state: ReactionsByUser, userId: string, key: ReactionKey | null): ReactionsByUser {
-  if (key === null) {
+/** Idempotent per-key toggle: applying the same (userId, key, active) any
+ * number of times — from an optimistic update, its own Realtime echo, or a
+ * stale duplicate event — converges to the same state instead of
+ * double-counting or flipping back. Touches only this one key; every other
+ * key already active for this user (or any other user) is untouched. */
+export function applyReactionToggle(state: ReactionsByUser, userId: string, key: ReactionKey, active: boolean): ReactionsByUser {
+  const current = state[userId] ?? [];
+  const has = current.includes(key);
+  if (active === has) return state;
+  const next = active ? [...current, key] : current.filter((k) => k !== key);
+  if (next.length === 0) {
     if (!(userId in state)) return state;
-    const next = { ...state };
-    delete next[userId];
-    return next;
+    const rest = { ...state };
+    delete rest[userId];
+    return rest;
   }
-  if (state[userId] === key) return state;
-  return { ...state, [userId]: key };
+  return { ...state, [userId]: next };
 }
 
 export interface ReactionCount {
@@ -96,10 +102,14 @@ export interface ReactionCount {
 }
 
 /** Nonzero chips only, in the fixed allowlist order — so chips never jump
- * around as counts change. */
+ * around as counts change. Counts distinct REACTIONS, not distinct people:
+ * one person holding both 👍 and 🔥 contributes 1 to each count, not 2 to
+ * either. */
 export function summarizeReactions(state: ReactionsByUser): ReactionCount[] {
   const counts = new Map<ReactionKey, number>();
-  for (const key of Object.values(state)) counts.set(key, (counts.get(key) ?? 0) + 1);
+  for (const keys of Object.values(state)) {
+    for (const key of keys) counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
   return REACTIONS.filter((r) => counts.has(r.key)).map((r) => ({ key: r.key, count: counts.get(r.key)! }));
 }
 

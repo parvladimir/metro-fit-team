@@ -29,7 +29,7 @@ import { editMessageAction, deleteMessageAction } from '@/app/(app)/team/chat/ac
 import { EventSocial } from '@/components/chat/EventSocial';
 import { addReplyOnce, EMPTY_SOCIAL, type EventSocial as Social } from '@/lib/event-social';
 import { ReactionChips } from '@/components/chat/ReactionChips';
-import { applyReactionChange, type ReactionKey, type ReactionsByUser } from '@/lib/reactions';
+import { applyReactionToggle, type ReactionKey, type ReactionsByUser } from '@/lib/reactions';
 import { setReactionAction, sendEventReplyAction, markNotificationsReadAction } from '@/app/(app)/team/chat/actions';
 import { refreshNotificationCount } from '@/lib/notification-store';
 import { MentionInput, type MentionInputHandle } from '@/components/chat/MentionInput';
@@ -91,8 +91,8 @@ export function ChatRoom({
   const mentionsOf = (id: string) => mentionsMap[id] ?? [];
   const updateSocial = (id: string, fn: (s: Social) => Social) =>
     setSocial((prev) => ({ ...prev, [id]: fn(prev[id] ?? EMPTY_SOCIAL) }));
-  const updateReactions = (messageId: string, userId: string, key: ReactionKey | null) =>
-    setReactions((prev) => ({ ...prev, [messageId]: applyReactionChange(prev[messageId] ?? {}, userId, key) }));
+  const updateReactions = (messageId: string, userId: string, key: ReactionKey, active: boolean) =>
+    setReactions((prev) => ({ ...prev, [messageId]: applyReactionToggle(prev[messageId] ?? {}, userId, key, active) }));
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -286,16 +286,14 @@ export function ChatRoom({
         })
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'message_reactions', filter: `team_id=eq.${teamId}` }, (payload) => {
           const r = payload.new as { message_id: string; user_id: string; reaction_type: ReactionKey };
-          updateReactions(r.message_id, r.user_id, r.reaction_type);
-        })
-        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'message_reactions', filter: `team_id=eq.${teamId}` }, (payload) => {
-          // A replace (switching emoji) is an UPDATE, not a delete+insert.
-          const r = payload.new as { message_id: string; user_id: string; reaction_type: ReactionKey };
-          updateReactions(r.message_id, r.user_id, r.reaction_type);
+          updateReactions(r.message_id, r.user_id, r.reaction_type, true);
         })
         .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'message_reactions', filter: `team_id=eq.${teamId}` }, (payload) => {
-          const r = payload.old as { message_id?: string; user_id?: string };
-          if (r.message_id && r.user_id) updateReactions(r.message_id, r.user_id, null);
+          // Each (message, user, emoji) triple is its own row now — there is
+          // no more "replace" (no UPDATE ever happens on this table), only
+          // this one specific emoji being added or removed.
+          const r = payload.old as { message_id?: string; user_id?: string; reaction_type?: ReactionKey };
+          if (r.message_id && r.user_id && r.reaction_type) updateReactions(r.message_id, r.user_id, r.reaction_type, false);
         })
         .subscribe();
     });
@@ -421,24 +419,25 @@ export function ChatRoom({
     }
   }
 
-  /** On success, trust the optimistic value rather than reconciling from the
-   * response — the Realtime INSERT/UPDATE/DELETE handlers above are an
-   * idempotent, eventually-consistent confirmation of whatever actually
-   * landed, regardless of HTTP response timing. On failure, revert only if
-   * this message's selection still equals what THIS call set — if a newer
-   * call already moved it elsewhere, don't clobber that newer state. */
-  async function setReaction(messageId: string, key: ReactionKey | null) {
-    const had = reactions[messageId]?.[currentUserId] ?? null;
-    updateReactions(messageId, currentUserId, key);
+  /** Adds or removes ONE emoji for the current user, independent of any other
+   * reaction they already hold on this message. On success, trust the
+   * optimistic value rather than reconciling from the response — the
+   * Realtime INSERT/DELETE handlers above are an idempotent,
+   * eventually-consistent confirmation of whatever actually landed,
+   * regardless of HTTP response timing. On failure, revert only if this
+   * specific key's state still equals what THIS call set — if a newer call
+   * already changed it again, don't clobber that newer state. */
+  async function setReaction(messageId: string, key: ReactionKey, active: boolean) {
+    updateReactions(messageId, currentUserId, key, active);
     function revert() {
       setReactions((prev) => {
-        const cur = prev[messageId]?.[currentUserId] ?? null;
-        if (cur !== key) return prev;
-        return { ...prev, [messageId]: applyReactionChange(prev[messageId] ?? {}, currentUserId, had) };
+        const mine = prev[messageId]?.[currentUserId] ?? [];
+        if (mine.includes(key) !== active) return prev;
+        return { ...prev, [messageId]: applyReactionToggle(prev[messageId] ?? {}, currentUserId, key, !active) };
       });
     }
     try {
-      const res = await setReactionAction(messageId, key);
+      const res = await setReactionAction(messageId, key, active);
       if (!res.ok) revert();
     } catch {
       revert();

@@ -615,9 +615,9 @@ describeIntegration('Row Level Security', () => {
     });
 
     it('93. reacting now succeeds on a plain text message and an image message (scope widened beyond system events)', async () => {
-      const r1 = await userB.client.rpc('set_message_reaction', { p_message_id: textId, p_reaction_key: 'fire' });
+      const r1 = await userB.client.rpc('set_message_reaction', { p_message_id: textId, p_reaction_key: 'fire', p_active: true });
       expect(r1.error).toBeNull();
-      const r2 = await userB.client.rpc('set_message_reaction', { p_message_id: imageId, p_reaction_key: 'clap' });
+      const r2 = await userB.client.rpc('set_message_reaction', { p_message_id: imageId, p_reaction_key: 'clap', p_active: true });
       expect(r2.error).toBeNull();
       const { data } = await admin.from('message_reactions').select('message_id, reaction_type').eq('user_id', userB.id).in('message_id', [textId, imageId]);
       expect((data ?? []).sort((a, b) => a.message_id.localeCompare(b.message_id))).toEqual(
@@ -629,69 +629,111 @@ describeIntegration('Row Level Security', () => {
     });
 
     it('94. a thread reply and a deleted message both still reject reactions', async () => {
-      const onReply = await userB.client.rpc('set_message_reaction', { p_message_id: replyId, p_reaction_key: 'heart' });
+      const onReply = await userB.client.rpc('set_message_reaction', { p_message_id: replyId, p_reaction_key: 'heart', p_active: true });
       expect(onReply.error).not.toBeNull();
-      const onDeleted = await userB.client.rpc('set_message_reaction', { p_message_id: deletedId, p_reaction_key: 'heart' });
+      const onDeleted = await userB.client.rpc('set_message_reaction', { p_message_id: deletedId, p_reaction_key: 'heart', p_active: true });
       expect(onDeleted.error).not.toBeNull();
     });
 
     it('95. an invalid key is rejected with a clean error', async () => {
-      const res = await userB.client.rpc('set_message_reaction', { p_message_id: textId, p_reaction_key: 'not_a_real_emoji' });
+      const res = await userB.client.rpc('set_message_reaction', { p_message_id: textId, p_reaction_key: 'not_a_real_emoji', p_active: true });
       expect(res.error).not.toBeNull();
     });
 
-    it('96. all 20 keys are individually valid', async () => {
+    it('96. one user can hold all 20 different reactions on the same message at once, and remove any one independently', async () => {
       const keys = [
         'thumbs_up', 'heart', 'fire', 'muscle', 'clap', 'laugh', 'smile', 'heart_eyes', 'cool', 'star_struck',
         'surprised', 'thinking', 'sad', 'sweat_smile', 'raised_hands', 'thanks', 'party', 'trophy', 'hundred', 'rocket',
       ];
       for (const key of keys) {
-        const res = await userB.client.rpc('set_message_reaction', { p_message_id: textId, p_reaction_key: key });
+        const res = await userB.client.rpc('set_message_reaction', { p_message_id: textId, p_reaction_key: key, p_active: true });
         expect(res.error).toBeNull();
-        const { data } = await admin.from('message_reactions').select('reaction_type').eq('message_id', textId).eq('user_id', userB.id).single();
-        expect(data?.reaction_type).toBe(key);
       }
+      const { data: all } = await admin.from('message_reactions').select('reaction_type').eq('message_id', textId).eq('user_id', userB.id);
+      expect((all ?? []).map((r) => r.reaction_type).sort()).toEqual([...keys].sort());
+
+      // Removing one (e.g. the one this test's old "replace" behavior used to leave behind) must not touch the rest.
+      const rm = await userB.client.rpc('set_message_reaction', { p_message_id: textId, p_reaction_key: 'fire', p_active: false });
+      expect(rm.error).toBeNull();
+      expect(rm.data).toBe('removed');
+      const { data: after } = await admin.from('message_reactions').select('reaction_type').eq('message_id', textId).eq('user_id', userB.id);
+      const remaining = (after ?? []).map((r) => r.reaction_type).sort();
+      expect(remaining).toEqual(keys.filter((k) => k !== 'fire').sort());
+      expect(remaining).toContain('thumbs_up');
+      expect(remaining).toContain('rocket');
+
+      // Clean up so later tests in this block start from a known state.
+      for (const key of remaining) await userB.client.rpc('set_message_reaction', { p_message_id: textId, p_reaction_key: key, p_active: false });
     });
 
-    it('97. replacing an emoji leaves exactly one row with the new key; passing null removes it', async () => {
-      await userB.client.rpc('set_message_reaction', { p_message_id: imageId, p_reaction_key: 'thumbs_up' });
-      await userB.client.rpc('set_message_reaction', { p_message_id: imageId, p_reaction_key: 'party' });
-      const { data: rows } = await admin.from('message_reactions').select('reaction_type').eq('message_id', imageId).eq('user_id', userB.id);
-      expect(rows).toEqual([{ reaction_type: 'party' }]);
+    it('97. adding the same emoji twice never duplicates the row; removing it twice is a harmless no-op', async () => {
+      const first = await userB.client.rpc('set_message_reaction', { p_message_id: imageId, p_reaction_key: 'party', p_active: true });
+      expect(first.data).toBe('added');
+      const second = await userB.client.rpc('set_message_reaction', { p_message_id: imageId, p_reaction_key: 'party', p_active: true });
+      expect(second.error).toBeNull();
+      expect(second.data).toBe('noop');
+      const { data: rows } = await admin.from('message_reactions').select('id').eq('message_id', imageId).eq('user_id', userB.id).eq('reaction_type', 'party');
+      expect(rows).toHaveLength(1);
 
-      const del = await userB.client.rpc('set_message_reaction', { p_message_id: imageId, p_reaction_key: null });
-      expect(del.error).toBeNull();
-      const { data: gone } = await admin.from('message_reactions').select('id').eq('message_id', imageId).eq('user_id', userB.id);
+      const removed = await userB.client.rpc('set_message_reaction', { p_message_id: imageId, p_reaction_key: 'party', p_active: false });
+      expect(removed.data).toBe('removed');
+      const removedAgain = await userB.client.rpc('set_message_reaction', { p_message_id: imageId, p_reaction_key: 'party', p_active: false });
+      expect(removedAgain.data).toBe('noop');
+      const { data: gone } = await admin.from('message_reactions').select('id').eq('message_id', imageId).eq('user_id', userB.id).eq('reaction_type', 'party');
       expect(gone).toEqual([]);
     });
 
     it('98. outsiders and non-members cannot react via the RPC', async () => {
-      const res = await outsider.client.rpc('set_message_reaction', { p_message_id: textId, p_reaction_key: 'heart' });
+      const res = await outsider.client.rpc('set_message_reaction', { p_message_id: textId, p_reaction_key: 'heart', p_active: true });
       expect(res.error).not.toBeNull();
     });
 
-    it('99. the RPC has no user_id parameter: nothing lets one actor forge another’s reaction', async () => {
-      await userB.client.rpc('set_message_reaction', { p_message_id: textId, p_reaction_key: 'cool' });
-      await userA.client.rpc('set_message_reaction', { p_message_id: textId, p_reaction_key: 'cool' });
+    it('99. the RPC has no user_id parameter: two users (even with the same emoji) never interfere with each other', async () => {
+      await userB.client.rpc('set_message_reaction', { p_message_id: textId, p_reaction_key: 'cool', p_active: true });
+      await userA.client.rpc('set_message_reaction', { p_message_id: textId, p_reaction_key: 'cool', p_active: true });
       const { data } = await admin.from('message_reactions').select('user_id').eq('message_id', textId).eq('reaction_type', 'cool');
       expect((data ?? []).map((r) => r.user_id).sort()).toEqual([userA.id, userB.id].sort());
+      // userA removing their own doesn't touch userB's identical-emoji row.
+      await userA.client.rpc('set_message_reaction', { p_message_id: textId, p_reaction_key: 'cool', p_active: false });
+      const { data: after } = await admin.from('message_reactions').select('user_id').eq('message_id', textId).eq('reaction_type', 'cool');
+      expect((after ?? []).map((r) => r.user_id)).toEqual([userB.id]);
     });
 
-    it('100. switching emoji does not create a second owner notification (generalizes test 31 across types)', async () => {
+    it('100. per-emoji counts are correct when users overlap (the task’s own worked example: 👍1 🔥2)', async () => {
+      const { data: fresh } = await admin.from('messages').insert({ team_id: teamId, user_id: userA.id, content: 'counts target' }).select('id').single();
+      const targetId = fresh!.id;
+      await userB.client.rpc('set_message_reaction', { p_message_id: targetId, p_reaction_key: 'thumbs_up', p_active: true });
+      await userB.client.rpc('set_message_reaction', { p_message_id: targetId, p_reaction_key: 'fire', p_active: true });
+      await userA.client.rpc('set_message_reaction', { p_message_id: targetId, p_reaction_key: 'fire', p_active: true });
+      const { data } = await admin.from('message_reactions').select('reaction_type').eq('message_id', targetId);
+      const counts: Record<string, number> = {};
+      for (const r of data ?? []) counts[r.reaction_type] = (counts[r.reaction_type] ?? 0) + 1;
+      expect(counts).toEqual({ thumbs_up: 1, fire: 2 });
+    });
+
+    it('101. adding several different emojis in quick succession creates only ONE owner notification; removing creates none; re-adding after removal still doesn’t spam', async () => {
       const { data: fresh } = await admin.from('messages').insert({ team_id: teamId, user_id: userA.id, content: 'notif target' }).select('id').single();
       const targetId = fresh!.id;
-      await userB.client.rpc('set_message_reaction', { p_message_id: targetId, p_reaction_key: 'thumbs_up' });
-      await userB.client.rpc('set_message_reaction', { p_message_id: targetId, p_reaction_key: 'fire' });
-      await userB.client.rpc('set_message_reaction', { p_message_id: targetId, p_reaction_key: null });
-      await userB.client.rpc('set_message_reaction', { p_message_id: targetId, p_reaction_key: 'party' });
-      const { data: n } = await admin.from('notifications').select('id, params').eq('user_id', userA.id).eq('message_id', targetId).eq('kind', 'reaction');
-      expect(n).toHaveLength(1);
-      // the notification keeps the emoji used at the moment of the FIRST reaction, not the current one
-      expect((n![0]!.params as { reaction_key: string }).reaction_key).toBe('thumbs_up');
+      await userB.client.rpc('set_message_reaction', { p_message_id: targetId, p_reaction_key: 'thumbs_up', p_active: true });
+      await userB.client.rpc('set_message_reaction', { p_message_id: targetId, p_reaction_key: 'fire', p_active: true });
+      await userB.client.rpc('set_message_reaction', { p_message_id: targetId, p_reaction_key: 'muscle', p_active: true });
+      const { data: afterThree } = await admin.from('notifications').select('id, params').eq('user_id', userA.id).eq('message_id', targetId).eq('kind', 'reaction');
+      expect(afterThree).toHaveLength(1);
+      // the notification keeps the emoji used at the moment of the FIRST reaction, not any later addition
+      expect((afterThree![0]!.params as { reaction_key: string }).reaction_key).toBe('thumbs_up');
+
+      await userB.client.rpc('set_message_reaction', { p_message_id: targetId, p_reaction_key: 'fire', p_active: false });
+      const { data: afterRemove } = await admin.from('notifications').select('id').eq('user_id', userA.id).eq('message_id', targetId).eq('kind', 'reaction');
+      expect(afterRemove).toHaveLength(1);
+
+      await userB.client.rpc('set_message_reaction', { p_message_id: targetId, p_reaction_key: 'fire', p_active: true });
+      const { data: afterReAdd } = await admin.from('notifications').select('id').eq('user_id', userA.id).eq('message_id', targetId).eq('kind', 'reaction');
+      expect(afterReAdd).toHaveLength(1);
     });
 
-    it('101. self-reaction still creates no notification, on any message type', async () => {
-      await userA.client.rpc('set_message_reaction', { p_message_id: imageId, p_reaction_key: 'rocket' });
+    it('102. self-reaction still creates no notification, across multiple emojis on any message type', async () => {
+      await userA.client.rpc('set_message_reaction', { p_message_id: imageId, p_reaction_key: 'rocket', p_active: true });
+      await userA.client.rpc('set_message_reaction', { p_message_id: imageId, p_reaction_key: 'hundred', p_active: true });
       const { data: n } = await admin.from('notifications').select('id').eq('user_id', userA.id).eq('actor_id', userA.id);
       expect(n).toEqual([]);
     });
@@ -868,7 +910,7 @@ describeIntegration('Row Level Security', () => {
       expect(feed).toHaveLength(1);
 
       // Non-'heart' key on purpose: cascade-delete must work for any of the 20 reactions, not just the default.
-      await userA.client.rpc('set_message_reaction', { p_message_id: started, p_reaction_key: 'fire' });
+      await userA.client.rpc('set_message_reaction', { p_message_id: started, p_reaction_key: 'fire', p_active: true });
       await userA.client.from('messages').insert({ team_id: teamId, user_id: userA.id, content: 'Stark', parent_message_id: started });
       const during = await points(W);
       expect(during.ledger).toBeGreaterThan(before.ledger);
