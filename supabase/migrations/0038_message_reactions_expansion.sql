@@ -57,16 +57,23 @@ begin
     execute format('alter table public.message_reactions drop constraint %I', c.conname);
   end loop;
 end $$;
+
+-- Preserve every existing "support" reaction in place (same row: same id,
+-- user_id, message_id, created_at — never delete+reinsert, so this can never
+-- re-trigger a notification). Must run AFTER the old check constraint is
+-- dropped (it only allowed 'support') and BEFORE the new one is added below
+-- (which doesn't allow 'support') — a real production run with existing
+-- 'support' rows hit exactly this ordering bug when the two statements were
+-- reversed: the new constraint's validation scan failed against rows that
+-- hadn't been migrated yet (local dev never caught it, since a fresh reset
+-- never has a pre-existing 'support' row to violate anything).
+update public.message_reactions set reaction_type = 'heart' where reaction_type = 'support';
+
 alter table public.message_reactions add constraint message_reactions_reaction_type_check
   check (reaction_type in (
     'thumbs_up', 'heart', 'fire', 'muscle', 'clap', 'laugh', 'smile', 'heart_eyes', 'cool', 'star_struck',
     'surprised', 'thinking', 'sad', 'sweat_smile', 'raised_hands', 'thanks', 'party', 'trophy', 'hundred', 'rocket'
   ));
-
--- Preserve every existing "support" reaction in place (same row: same id,
--- user_id, message_id, created_at — never delete+reinsert, so this can never
--- re-trigger a notification).
-update public.message_reactions set reaction_type = 'heart' where reaction_type = 'support';
 
 alter table public.message_reactions alter column reaction_type set default 'heart';
 
