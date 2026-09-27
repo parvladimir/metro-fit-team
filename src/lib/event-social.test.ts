@@ -1,13 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   addReplyOnce,
-  applyReaction,
   cleanReply,
   eventDeepLink,
   firstName,
   inAppNotificationText,
   isValidMessageId,
-  reactionText,
   repliesLabel,
   replyText,
   shouldCollapseReplies,
@@ -15,20 +13,6 @@ import {
 } from './event-social';
 
 const reply = (id: string, at: string): EventReply => ({ id, user_id: 'u', content: 'x', created_at: at, authorName: 'A', authorAvatar: null });
-
-describe('reactions', () => {
-  it('adds once, removes once (no duplicates)', () => {
-    let r: string[] = [];
-    r = applyReaction(r, 'a', true);
-    r = applyReaction(r, 'a', true);
-    expect(r).toEqual(['a']);
-    r = applyReaction(r, 'b', true);
-    expect(r).toEqual(['a', 'b']);
-    r = applyReaction(r, 'a', false);
-    r = applyReaction(r, 'a', false);
-    expect(r).toEqual(['b']);
-  });
-});
 
 describe('reply thread', () => {
   it('dedupes an optimistic reply that also arrives via realtime', () => {
@@ -57,19 +41,26 @@ describe('reply thread', () => {
 });
 
 describe('notification wording (privacy: name, title, short reply only)', () => {
-  it('reaction', () => {
-    expect(reactionText('Tim Aigner')).toBe('Tim unterstützt dein Training 💪');
-    expect(reactionText('Tim Aigner', 'Beine')).toBe('Tim unterstützt dein Training „Beine“ 💪');
-  });
   it('reply with truncated preview', () => {
     expect(replyText('Volodymyr Parashchak', 'Stark! Viel Erfolg 💪')).toBe('Volodymyr hat auf dein Training geantwortet: „Stark! Viel Erfolg 💪“');
     const long = replyText('Tim', 'a'.repeat(300));
     expect(long.length).toBeLessThan(140);
     expect(long).toContain('…');
   });
-  it('in-app text', () => {
+  it('in-app text: reaction with a recorded key uses the emoji-aware wording', () => {
+    expect(inAppNotificationText('reaction', { actor_name: 'Tim Aigner', reaction_key: 'fire', is_workout: false })).toBe(
+      'Tim hat mit 🔥 auf deine Nachricht reagiert.'
+    );
+    expect(inAppNotificationText('reaction', { actor_name: 'Tim Aigner', reaction_key: 'muscle', is_workout: true, event_title: 'Beine' })).toBe(
+      'Tim hat mit 💪 auf dein Training „Beine“ reagiert.'
+    );
+  });
+  it('in-app text: reaction with no recorded key (e.g. malformed data) falls back gracefully', () => {
     expect(inAppNotificationText('reaction', { actor_name: 'Tim Aigner' })).toBe('Tim unterstützt dein Training.');
+  });
+  it('in-app text: reply / mention are unaffected', () => {
     expect(inAppNotificationText('reply', { actor_name: 'Volodymyr Parashchak' })).toBe('Volodymyr hat auf dein Training geantwortet.');
+    expect(inAppNotificationText('mention', { actor_name: 'Tim' })).toBe('Tim hat dich im Team-Chat erwähnt.');
   });
   it('first name fallback', () => expect(firstName('  ')).toBe('Jemand'));
 });

@@ -24,7 +24,15 @@ vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: () => admin }));
 
 import { notifyEventOwner } from './push';
 
-const base = { ownerId: 'owner', actorId: 'actor', messageId: '1d28b13b-575c-488e-bc71-11f447c4915e', kind: 'reaction' as const, eventTitle: 'Beine' };
+const base = {
+  ownerId: 'owner',
+  actorId: 'actor',
+  messageId: '1d28b13b-575c-488e-bc71-11f447c4915e',
+  kind: 'reaction' as const,
+  eventTitle: 'Beine',
+  reactionKey: 'muscle' as const,
+  isWorkoutEvent: true,
+};
 
 describe('notifyEventOwner', () => {
   beforeEach(() => {
@@ -42,9 +50,15 @@ describe('notifyEventOwner', () => {
     expect(sendNotification).toHaveBeenCalledTimes(1);
     const payload = JSON.parse((sendNotification.mock.calls[0] as unknown[])[1] as string);
     expect(payload.title).toBe('METRO Fit Team');
-    expect(payload.body).toBe('Tim unterstützt dein Training „Beine“ 💪');
+    expect(payload.body).toBe('Tim hat mit 💪 auf dein Training „Beine“ reagiert.');
     expect(payload.url).toBe('/team/chat?message=1d28b13b-575c-488e-bc71-11f447c4915e');
     expect(payload.badgeCount).toBe(1);
+  });
+
+  it('C. reaction push on an ordinary message (not a workout) uses the generic wording, no title', async () => {
+    await notifyEventOwner({ ...base, isWorkoutEvent: false, reactionKey: 'fire' });
+    const payload = JSON.parse((sendNotification.mock.calls[0] as unknown[])[1] as string);
+    expect(payload.body).toBe('Tim hat mit 🔥 auf deine Nachricht reagiert.');
   });
 
   it('D. reply push includes a short preview', async () => {

@@ -27,8 +27,10 @@ import { MessageActions } from '@/components/chat/MessageActions';
 import { MessageEditor } from '@/components/chat/MessageEditor';
 import { editMessageAction, deleteMessageAction } from '@/app/(app)/team/chat/actions';
 import { EventSocial } from '@/components/chat/EventSocial';
-import { addReplyOnce, applyReaction, EMPTY_SOCIAL, type EventSocial as Social } from '@/lib/event-social';
-import { toggleSupportAction, sendEventReplyAction, markNotificationsReadAction } from '@/app/(app)/team/chat/actions';
+import { addReplyOnce, EMPTY_SOCIAL, type EventSocial as Social } from '@/lib/event-social';
+import { ReactionChips } from '@/components/chat/ReactionChips';
+import { applyReactionChange, type ReactionKey, type ReactionsByUser } from '@/lib/reactions';
+import { setReactionAction, sendEventReplyAction, markNotificationsReadAction } from '@/app/(app)/team/chat/actions';
 import { refreshNotificationCount } from '@/lib/notification-store';
 import { MentionInput, type MentionInputHandle } from '@/components/chat/MentionInput';
 import { QuoteBlock } from '@/components/chat/QuoteBlock';
@@ -45,6 +47,7 @@ export function ChatRoom({
   initialMessages,
   previousReadAt,
   initialSocial,
+  initialReactions,
   focusMessageId,
   members,
   initialMentions,
@@ -58,6 +61,7 @@ export function ChatRoom({
   initialMessages: ChatMessage[];
   previousReadAt: string | null;
   initialSocial: Record<string, Social>;
+  initialReactions: Record<string, ReactionsByUser>;
   focusMessageId: string | null;
   members: MentionMember[];
   initialMentions: Record<string, MessageMention[]>;
@@ -78,6 +82,7 @@ export function ChatRoom({
   const [loadingOlder, setLoadingOlder] = useState(false);
   const restoreScrollRef = useRef<number | null>(null);
   const [social, setSocial] = useState(initialSocial);
+  const [reactions, setReactions] = useState(initialReactions);
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [mentionsMap, setMentionsMap] = useState(initialMentions);
@@ -86,6 +91,8 @@ export function ChatRoom({
   const mentionsOf = (id: string) => mentionsMap[id] ?? [];
   const updateSocial = (id: string, fn: (s: Social) => Social) =>
     setSocial((prev) => ({ ...prev, [id]: fn(prev[id] ?? EMPTY_SOCIAL) }));
+  const updateReactions = (messageId: string, userId: string, key: ReactionKey | null) =>
+    setReactions((prev) => ({ ...prev, [messageId]: applyReactionChange(prev[messageId] ?? {}, userId, key) }));
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -278,14 +285,17 @@ export function ChatRoom({
           }
         })
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'message_reactions', filter: `team_id=eq.${teamId}` }, (payload) => {
-          const r = payload.new as { message_id: string; user_id: string };
-          updateSocial(r.message_id, (cur) => ({ ...cur, reactors: applyReaction(cur.reactors, r.user_id, true) }));
+          const r = payload.new as { message_id: string; user_id: string; reaction_type: ReactionKey };
+          updateReactions(r.message_id, r.user_id, r.reaction_type);
+        })
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'message_reactions', filter: `team_id=eq.${teamId}` }, (payload) => {
+          // A replace (switching emoji) is an UPDATE, not a delete+insert.
+          const r = payload.new as { message_id: string; user_id: string; reaction_type: ReactionKey };
+          updateReactions(r.message_id, r.user_id, r.reaction_type);
         })
         .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'message_reactions', filter: `team_id=eq.${teamId}` }, (payload) => {
           const r = payload.old as { message_id?: string; user_id?: string };
-          if (r.message_id && r.user_id) {
-            updateSocial(r.message_id, (cur) => ({ ...cur, reactors: applyReaction(cur.reactors, r.user_id!, false) }));
-          }
+          if (r.message_id && r.user_id) updateReactions(r.message_id, r.user_id, null);
         })
         .subscribe();
     });
@@ -359,6 +369,7 @@ export function ChatRoom({
       });
       setMentionsMap((prev) => ({ ...res.mentions, ...prev }));
       setSocial((prev) => ({ ...res.social, ...prev }));
+      setReactions((prev) => ({ ...res.reactions, ...prev }));
       setQuotes((prev) => ({ ...res.quotes, ...prev }));
       setShares((prev) => ({ ...res.shares, ...prev }));
       setHasMore(res.hasMore);
@@ -410,16 +421,28 @@ export function ChatRoom({
     }
   }
 
-  function toggleSupport(eventId: string) {
-    const had = (social[eventId] ?? EMPTY_SOCIAL).reactors.includes(currentUserId);
-    updateSocial(eventId, (cur) => ({ ...cur, reactors: applyReaction(cur.reactors, currentUserId, !had) }));
-    toggleSupportAction(eventId)
-      .then((res) => {
-        // Server is the source of truth: revert an optimistic change that failed.
-        if (!res.ok) updateSocial(eventId, (cur) => ({ ...cur, reactors: applyReaction(cur.reactors, currentUserId, had) }));
-        else updateSocial(eventId, (cur) => ({ ...cur, reactors: applyReaction(cur.reactors, currentUserId, res.reacted) }));
-      })
-      .catch(() => updateSocial(eventId, (cur) => ({ ...cur, reactors: applyReaction(cur.reactors, currentUserId, had) })));
+  /** On success, trust the optimistic value rather than reconciling from the
+   * response — the Realtime INSERT/UPDATE/DELETE handlers above are an
+   * idempotent, eventually-consistent confirmation of whatever actually
+   * landed, regardless of HTTP response timing. On failure, revert only if
+   * this message's selection still equals what THIS call set — if a newer
+   * call already moved it elsewhere, don't clobber that newer state. */
+  async function setReaction(messageId: string, key: ReactionKey | null) {
+    const had = reactions[messageId]?.[currentUserId] ?? null;
+    updateReactions(messageId, currentUserId, key);
+    function revert() {
+      setReactions((prev) => {
+        const cur = prev[messageId]?.[currentUserId] ?? null;
+        if (cur !== key) return prev;
+        return { ...prev, [messageId]: applyReactionChange(prev[messageId] ?? {}, currentUserId, had) };
+      });
+    }
+    try {
+      const res = await setReactionAction(messageId, key);
+      if (!res.ok) revert();
+    } catch {
+      revert();
+    }
   }
 
   async function sendReply(eventId: string, text: string, mentionIds: string[]): Promise<string | null> {
@@ -573,9 +596,15 @@ export function ChatRoom({
                     social={social[m.id] ?? EMPTY_SOCIAL}
                     currentUserId={currentUserId}
                     ownerName={m.user_id === currentUserId ? 'dich selbst' : m.authorName.split(' ')[0] || m.authorName}
-                    onToggleSupport={() => toggleSupport(m.id)}
                     members={members}
                     onSendReply={(text, ids) => sendReply(m.id, text, ids)}
+                  />
+                  <ReactionChips
+                    messageId={m.id}
+                    currentUserId={currentUserId}
+                    state={reactions[m.id]}
+                    onChange={setReaction}
+                    className="mx-auto mt-1.5 w-full max-w-[88%] justify-center"
                   />
                 </div>
               );
@@ -634,6 +663,7 @@ export function ChatRoom({
                       />
                     )}
                   </CreatorMessageCard>
+                  <ReactionChips messageId={m.id} currentUserId={currentUserId} state={reactions[m.id]} onChange={setReaction} className="mt-1 px-1" />
                 </div>
               );
             }
@@ -685,6 +715,7 @@ export function ChatRoom({
                         {m.edited_at && <span className="mr-1 italic">bearbeitet</span>}
                         {new Date(m.created_at).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}
                       </span>
+                      <ReactionChips messageId={m.id} currentUserId={currentUserId} state={reactions[m.id]} onChange={setReaction} className="mt-1 px-1" />
                     </div>
                   </div>
                 </div>
@@ -757,6 +788,7 @@ export function ChatRoom({
                       {m.edited_at && <span className="mr-1 italic">bearbeitet</span>}
                       {new Date(m.created_at).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}
                     </span>
+                    <ReactionChips messageId={m.id} currentUserId={currentUserId} state={reactions[m.id]} onChange={setReaction} className="mt-1 px-1" />
                   </div>
                 </div>
               </div>

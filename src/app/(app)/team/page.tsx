@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import clsx from 'clsx';
-import { QrCode, MessageCircle, Trophy, ChevronRight, Users, Heart, AtSign, Layers } from 'lucide-react';
+import { QrCode, MessageCircle, Trophy, ChevronRight, Users, AtSign, Layers } from 'lucide-react';
 import { requireAuthUser, getCurrentProfile, getPrimaryTeamMembership } from '@/lib/data/profile';
 import { getTeamRankingWithProfiles, getTeamRankingRules, type RankingPeriod } from '@/lib/data/team';
 import { PointsRulesSheet } from '@/components/team/PointsRulesSheet';
@@ -11,6 +11,7 @@ import { getUnreadChatCount, getRecentNotifications, getUnreadNotificationCount 
 import { NotificationCount } from '@/components/notifications/NotificationDot';
 import { ChatPushPrompt } from '@/components/chat/ChatPushPrompt';
 import { eventDeepLink, inAppNotificationText } from '@/lib/event-social';
+import { emojiFor } from '@/lib/reactions';
 import { stripMarkdown } from '@/lib/chat-format';
 import { UnreadBadge } from '@/components/chat/UnreadBadge';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -111,7 +112,9 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
               ) : n.kind === 'reply' ? (
                 <MessageCircle size={15} className="mt-0.5 shrink-0 text-brand" />
               ) : (
-                <Heart size={15} className="mt-0.5 shrink-0 fill-current text-brand" />
+                <span className="mt-0.5 shrink-0 text-base leading-none" aria-hidden>
+                  {emojiFor(n.params.reaction_key)}
+                </span>
               )}
               <div className="min-w-0 flex-1">
                 <p className={`break-words text-sm ${n.read_at ? 'text-neutral-500' : 'font-semibold text-neutral-900'}`}>

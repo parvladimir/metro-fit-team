@@ -1,25 +1,26 @@
 'use client';
 
 import { useState } from 'react';
-import { ChevronDown, Heart, Loader2, MessageCircle, Send } from 'lucide-react';
+import { ChevronDown, Loader2, MessageCircle, Send } from 'lucide-react';
 import { Avatar } from '@/components/ui/Avatar';
 import { MentionInput } from '@/components/chat/MentionInput';
 import { splitByMentions, stillMentioned, type MentionMember } from '@/lib/mentions';
 import { MAX_REPLY_LENGTH, repliesLabel, shouldCollapseReplies, type EventReply, type EventSocial as Social } from '@/lib/event-social';
 
-/** Reactions + one-level reply thread underneath an activity event card. The
- * card itself stays a distinct motivational event — this only adds controls. */
+/** One-level reply thread underneath an activity event card. Reactions (now
+ * shared with every other message type) render separately via
+ * `ReactionChips` — this stays event-only, matching where replies actually
+ * work. The card itself stays a distinct motivational event — this only adds
+ * controls. */
 export function EventSocial({
   social,
   currentUserId,
-  onToggleSupport,
   onSendReply,
   ownerName,
   members,
 }: {
   social: Social;
   currentUserId: string;
-  onToggleSupport: () => void;
   onSendReply: (text: string, mentionUserIds: string[]) => Promise<string | null>;
   ownerName: string;
   members: MentionMember[];
@@ -31,8 +32,6 @@ export function EventSocial({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const supported = social.reactors.includes(currentUserId);
-  const count = social.reactors.length;
   const replies = social.replies;
   const collapsed = shouldCollapseReplies(replies.length, expanded);
 
@@ -53,18 +52,6 @@ export function EventSocial({
   return (
     <div className="mx-auto mt-1.5 flex w-full max-w-[88%] flex-col gap-2">
       <div className="flex items-center justify-center gap-2">
-        <button
-          type="button"
-          onClick={onToggleSupport}
-          aria-pressed={supported}
-          aria-label={supported ? 'Unterstützung zurücknehmen' : 'Training unterstützen'}
-          className={`inline-flex min-h-[32px] items-center gap-1.5 rounded-full px-3 text-xs font-semibold transition active:scale-95 ${
-            supported ? 'bg-brand/15 text-brand ring-1 ring-brand/40' : 'border border-white/[0.08] bg-surface-3 text-neutral-600'
-          }`}
-        >
-          <Heart size={14} strokeWidth={2.25} className={supported ? 'fill-current' : ''} />
-          {count > 0 ? count : 'Unterstützen'}
-        </button>
         <button
           type="button"
           onClick={() => setComposerOpen((v) => !v)}

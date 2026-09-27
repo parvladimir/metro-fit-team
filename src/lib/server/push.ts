@@ -2,7 +2,8 @@ import 'server-only';
 import webpush from 'web-push';
 import { publicEnv, getServerEnv } from '@/lib/env';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { eventDeepLink, reactionText, replyText, firstName } from '@/lib/event-social';
+import { eventDeepLink, replyText, firstName } from '@/lib/event-social';
+import { reactionText, type ReactionKey } from '@/lib/reactions';
 import { stripMarkdown } from '@/lib/chat-format';
 
 let vapidConfigured = false;
@@ -49,6 +50,10 @@ export async function notifyEventOwner(params: {
   kind: 'reaction' | 'reply';
   eventTitle?: string | null;
   replyContent?: string;
+  /** Required for kind: 'reaction' — which of the 20 emoji was used. */
+  reactionKey?: ReactionKey;
+  /** Required for kind: 'reaction' — workout event vs. an ordinary message. */
+  isWorkoutEvent?: boolean;
 }): Promise<void> {
   if (params.ownerId === params.actorId || !isPushConfigured()) return;
   try {
@@ -72,7 +77,7 @@ export async function notifyEventOwner(params: {
     const body =
       params.kind === 'reply'
         ? replyText(actorName, params.replyContent ?? '')
-        : reactionText(actorName, params.eventTitle);
+        : reactionText(actorName, params.reactionKey ?? 'heart', params.isWorkoutEvent, params.eventTitle);
     const payload = JSON.stringify({
       title: 'METRO Fit Team',
       body,

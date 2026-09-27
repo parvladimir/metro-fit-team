@@ -518,11 +518,11 @@ describeIntegration('Row Level Security', () => {
       expect(n).toEqual([]);
     });
 
-    it('33. cannot react as someone else, on a human message, or as an outsider; outsider cannot read reactions', async () => {
+    it('33. cannot react as someone else or as an outsider; outsider cannot read reactions', async () => {
+      // Reacting to a human message is no longer rejected — see the "emoji
+      // reactions" block below for the scope-widening this used to forbid.
       const forge = await userB.client.from('message_reactions').insert({ message_id: eventId, user_id: userA.id });
       expect(forge.error).not.toBeNull();
-      const human = await userB.client.from('message_reactions').insert({ message_id: humanId, user_id: userB.id });
-      expect(human.error).not.toBeNull();
       const out = await outsider.client.from('message_reactions').insert({ message_id: eventId, user_id: outsider.id });
       expect(out.error).not.toBeNull();
       const seen = await outsider.client.from('message_reactions').select('id').eq('message_id', eventId);
@@ -579,6 +579,124 @@ describeIntegration('Row Level Security', () => {
       expect((own.data ?? []).length).toBeGreaterThan(0);
     });
   });
+
+  describe('emoji reactions (20-key expansion)', () => {
+    let textId: string;
+    let imageId: string;
+    let deletedId: string;
+    let replyId: string;
+
+    beforeAll(async () => {
+      const { data: ev } = await admin
+        .from('messages')
+        .insert({ team_id: teamId, user_id: userA.id, content: 'hat ein Training gestartet', message_type: 'system', event_type: 'workout_started', metadata: { title: 'Reaktionstest' } })
+        .select('id')
+        .single();
+      const { data: t } = await admin.from('messages').insert({ team_id: teamId, user_id: userA.id, content: 'plain text' }).select('id').single();
+      textId = t!.id;
+      const { data: img } = await admin
+        .from('messages')
+        .insert({ team_id: teamId, user_id: userA.id, content: '', message_type: 'image', attachment_path: `${teamId}/${userA.id}/x.webp` })
+        .select('id')
+        .single();
+      imageId = img!.id;
+      const { data: del } = await admin
+        .from('messages')
+        .insert({ team_id: teamId, user_id: userA.id, content: 'will be deleted', deleted_at: new Date().toISOString() })
+        .select('id')
+        .single();
+      deletedId = del!.id;
+      const { data: rep } = await admin
+        .from('messages')
+        .insert({ team_id: teamId, user_id: userB.id, content: 'a reply', parent_message_id: ev!.id })
+        .select('id')
+        .single();
+      replyId = rep!.id;
+    });
+
+    it('93. reacting now succeeds on a plain text message and an image message (scope widened beyond system events)', async () => {
+      const r1 = await userB.client.rpc('set_message_reaction', { p_message_id: textId, p_reaction_key: 'fire' });
+      expect(r1.error).toBeNull();
+      const r2 = await userB.client.rpc('set_message_reaction', { p_message_id: imageId, p_reaction_key: 'clap' });
+      expect(r2.error).toBeNull();
+      const { data } = await admin.from('message_reactions').select('message_id, reaction_type').eq('user_id', userB.id).in('message_id', [textId, imageId]);
+      expect((data ?? []).sort((a, b) => a.message_id.localeCompare(b.message_id))).toEqual(
+        [
+          { message_id: textId, reaction_type: 'fire' },
+          { message_id: imageId, reaction_type: 'clap' },
+        ].sort((a, b) => a.message_id.localeCompare(b.message_id))
+      );
+    });
+
+    it('94. a thread reply and a deleted message both still reject reactions', async () => {
+      const onReply = await userB.client.rpc('set_message_reaction', { p_message_id: replyId, p_reaction_key: 'heart' });
+      expect(onReply.error).not.toBeNull();
+      const onDeleted = await userB.client.rpc('set_message_reaction', { p_message_id: deletedId, p_reaction_key: 'heart' });
+      expect(onDeleted.error).not.toBeNull();
+    });
+
+    it('95. an invalid key is rejected with a clean error', async () => {
+      const res = await userB.client.rpc('set_message_reaction', { p_message_id: textId, p_reaction_key: 'not_a_real_emoji' });
+      expect(res.error).not.toBeNull();
+    });
+
+    it('96. all 20 keys are individually valid', async () => {
+      const keys = [
+        'thumbs_up', 'heart', 'fire', 'muscle', 'clap', 'laugh', 'smile', 'heart_eyes', 'cool', 'star_struck',
+        'surprised', 'thinking', 'sad', 'sweat_smile', 'raised_hands', 'thanks', 'party', 'trophy', 'hundred', 'rocket',
+      ];
+      for (const key of keys) {
+        const res = await userB.client.rpc('set_message_reaction', { p_message_id: textId, p_reaction_key: key });
+        expect(res.error).toBeNull();
+        const { data } = await admin.from('message_reactions').select('reaction_type').eq('message_id', textId).eq('user_id', userB.id).single();
+        expect(data?.reaction_type).toBe(key);
+      }
+    });
+
+    it('97. replacing an emoji leaves exactly one row with the new key; passing null removes it', async () => {
+      await userB.client.rpc('set_message_reaction', { p_message_id: imageId, p_reaction_key: 'thumbs_up' });
+      await userB.client.rpc('set_message_reaction', { p_message_id: imageId, p_reaction_key: 'party' });
+      const { data: rows } = await admin.from('message_reactions').select('reaction_type').eq('message_id', imageId).eq('user_id', userB.id);
+      expect(rows).toEqual([{ reaction_type: 'party' }]);
+
+      const del = await userB.client.rpc('set_message_reaction', { p_message_id: imageId, p_reaction_key: null });
+      expect(del.error).toBeNull();
+      const { data: gone } = await admin.from('message_reactions').select('id').eq('message_id', imageId).eq('user_id', userB.id);
+      expect(gone).toEqual([]);
+    });
+
+    it('98. outsiders and non-members cannot react via the RPC', async () => {
+      const res = await outsider.client.rpc('set_message_reaction', { p_message_id: textId, p_reaction_key: 'heart' });
+      expect(res.error).not.toBeNull();
+    });
+
+    it('99. the RPC has no user_id parameter: nothing lets one actor forge another’s reaction', async () => {
+      await userB.client.rpc('set_message_reaction', { p_message_id: textId, p_reaction_key: 'cool' });
+      await userA.client.rpc('set_message_reaction', { p_message_id: textId, p_reaction_key: 'cool' });
+      const { data } = await admin.from('message_reactions').select('user_id').eq('message_id', textId).eq('reaction_type', 'cool');
+      expect((data ?? []).map((r) => r.user_id).sort()).toEqual([userA.id, userB.id].sort());
+    });
+
+    it('100. switching emoji does not create a second owner notification (generalizes test 31 across types)', async () => {
+      const { data: fresh } = await admin.from('messages').insert({ team_id: teamId, user_id: userA.id, content: 'notif target' }).select('id').single();
+      const targetId = fresh!.id;
+      await userB.client.rpc('set_message_reaction', { p_message_id: targetId, p_reaction_key: 'thumbs_up' });
+      await userB.client.rpc('set_message_reaction', { p_message_id: targetId, p_reaction_key: 'fire' });
+      await userB.client.rpc('set_message_reaction', { p_message_id: targetId, p_reaction_key: null });
+      await userB.client.rpc('set_message_reaction', { p_message_id: targetId, p_reaction_key: 'party' });
+      const { data: n } = await admin.from('notifications').select('id, params').eq('user_id', userA.id).eq('message_id', targetId).eq('kind', 'reaction');
+      expect(n).toHaveLength(1);
+      // the notification keeps the emoji used at the moment of the FIRST reaction, not the current one
+      expect((n![0]!.params as { reaction_key: string }).reaction_key).toBe('thumbs_up');
+    });
+
+    it('101. self-reaction still creates no notification, on any message type', async () => {
+      await userA.client.rpc('set_message_reaction', { p_message_id: imageId, p_reaction_key: 'rocket' });
+      const { data: n } = await admin.from('notifications').select('id').eq('user_id', userA.id).eq('actor_id', userA.id);
+      expect(n).toEqual([]);
+    });
+  });
+
   describe('message editing', () => {
     let evId: string;
     let msgId: string;
@@ -749,7 +867,8 @@ describeIntegration('Row Level Security', () => {
       const { data: feed } = await admin.from('activity_feed').select('id').eq('workout_id', id);
       expect(feed).toHaveLength(1);
 
-      await userA.client.from('message_reactions').insert({ message_id: started, user_id: userA.id });
+      // Non-'heart' key on purpose: cascade-delete must work for any of the 20 reactions, not just the default.
+      await userA.client.rpc('set_message_reaction', { p_message_id: started, p_reaction_key: 'fire' });
       await userA.client.from('messages').insert({ team_id: teamId, user_id: userA.id, content: 'Stark', parent_message_id: started });
       const during = await points(W);
       expect(during.ledger).toBeGreaterThan(before.ledger);

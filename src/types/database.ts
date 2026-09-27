@@ -2,6 +2,8 @@
 // Regenerate with `supabase gen types typescript` once a live project exists
 // and reconcile — this file is the source of truth for local development.
 
+import type { ReactionKey } from '@/lib/reactions';
+
 export type FitnessGoal =
   | 'general_fitness'
   | 'lose_weight'
@@ -45,7 +47,7 @@ export type ChallengeMetric = 'workouts_count' | 'minutes' | 'steps' | 'distance
 
 export type NotificationCategory =
   | 'trainingserinnerung' | 'wochenziel' | 'messungserinnerung'
-  | 'herausforderung' | 'team_aktivitaet' | 'wochenzusammenfassung';
+  | 'herausforderung' | 'team_aktivitaet' | 'wochenzusammenfassung' | 'reaktion_antwort';
 
 export interface Profile {
   id: string;
@@ -377,6 +379,16 @@ export interface Message {
   created_at: string;
   edited_at: string | null;
   deleted_at: string | null;
+}
+
+export interface MessageReaction {
+  id: string;
+  message_id: string;
+  team_id: string;
+  user_id: string;
+  reaction_type: ReactionKey;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface PlanShare {

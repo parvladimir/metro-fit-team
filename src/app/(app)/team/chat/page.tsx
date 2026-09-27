@@ -1,7 +1,7 @@
 import { MessageCircle } from 'lucide-react';
 import { BackLink } from '@/components/ui/BackLink';
 import { requireAuthUser, getPrimaryTeamMembership } from '@/lib/data/profile';
-import { getMessagesPage, getChatLastReadAt, getEventSocial, getMentionMembers, getMessageMentions, getQuotes } from '@/lib/data/chat';
+import { getMessagesPage, getChatLastReadAt, getEventReplies, getMessageReactions, getMentionMembers, getMessageMentions, getQuotes } from '@/lib/data/chat';
 import { getPlanSharesForViewer } from '@/lib/data/plan-shares';
 import { getTemplates } from '@/lib/data/plan-templates';
 import { isValidMessageId } from '@/lib/event-social';
@@ -28,8 +28,9 @@ export default async function ChatPage({ searchParams }: { searchParams: Promise
     getChatLastReadAt(membership.team_id, user.id),
   ]);
 
-  const [social, members, mentions, quotes, shares, myTemplates] = await Promise.all([
-    getEventSocial(messages.filter((m) => m.message_type === 'system').map((m) => m.id)),
+  const [social, reactions, members, mentions, quotes, shares, myTemplates] = await Promise.all([
+    getEventReplies(messages.filter((m) => m.message_type === 'system').map((m) => m.id)),
+    getMessageReactions(messages.map((m) => m.id)),
     getMentionMembers(membership.team_id, user.id),
     getMessageMentions(messages.filter((m) => m.message_type !== 'system').map((m) => m.id)),
     getQuotes(messages),
@@ -54,6 +55,7 @@ export default async function ChatPage({ searchParams }: { searchParams: Promise
         initialMessages={messages}
         previousReadAt={previousReadAt}
         initialSocial={social}
+        initialReactions={reactions}
         members={members}
         initialMentions={mentions}
         initialHasMore={hasMore}

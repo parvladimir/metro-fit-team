@@ -1,4 +1,7 @@
-/** Pure helpers for reactions / replies on team activity events. */
+/** Pure helpers for replies on team activity events. Reactions (now shared
+ * across every message type, not just events) live in `@/lib/reactions`. */
+
+import { isReactionKey, reactionText } from '@/lib/reactions';
 
 export interface EventReply {
   id: string;
@@ -11,13 +14,11 @@ export interface EventReply {
 }
 
 export interface EventSocial {
-  /** user ids that currently support the event */
-  reactors: string[];
   /** one level only: direct replies, oldest first */
   replies: EventReply[];
 }
 
-export const EMPTY_SOCIAL: EventSocial = { reactors: [], replies: [] };
+export const EMPTY_SOCIAL: EventSocial = { replies: [] };
 export const REPLY_COLLAPSE_THRESHOLD = 3;
 export const MAX_REPLY_LENGTH = 500;
 
@@ -30,31 +31,21 @@ function truncate(text: string, max: number): string {
   return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean;
 }
 
-/** Push/in-app wording. Only the actor's first name, the workout title and the
- * short reply text — never health data. */
-export function reactionText(actorName: string, eventTitle?: string | null): string {
-  const who = firstName(actorName);
-  return eventTitle ? `${who} unterstützt dein Training „${eventTitle}“ 💪` : `${who} unterstützt dein Training 💪`;
-}
-
 export function replyText(actorName: string, reply: string): string {
   return `${firstName(actorName)} hat auf dein Training geantwortet: „${truncate(reply, 80)}“`;
 }
 
 export function inAppNotificationText(
   kind: 'reaction' | 'reply' | 'mention' | null,
-  params: { actor_name?: string; event_title?: string | null; preview?: string }
+  params: { actor_name?: string; event_title?: string | null; preview?: string; reaction_key?: string; is_workout?: boolean }
 ): string {
   const who = firstName(params.actor_name ?? '');
   if (kind === 'mention') return `${who} hat dich im Team-Chat erwähnt.`;
-  return kind === 'reply' ? `${who} hat auf dein Training geantwortet.` : `${who} unterstützt dein Training.`;
-}
-
-export function applyReaction(reactors: string[], userId: string, add: boolean): string[] {
-  const has = reactors.includes(userId);
-  if (add && !has) return [...reactors, userId];
-  if (!add && has) return reactors.filter((id) => id !== userId);
-  return reactors;
+  if (kind === 'reply') return `${who} hat auf dein Training geantwortet.`;
+  if (isReactionKey(params.reaction_key)) {
+    return reactionText(params.actor_name ?? '', params.reaction_key, params.is_workout ?? true, params.event_title);
+  }
+  return `${who} unterstützt dein Training.`;
 }
 
 /** Realtime + optimistic inserts can both deliver a reply: keep one. */
