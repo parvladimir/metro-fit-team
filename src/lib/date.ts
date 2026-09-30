@@ -89,6 +89,27 @@ export function setLocalTimeOfDay(reference: Date, hhmm: string, timeZone: strin
   return new Date(guess.getTime() - offsetMinutes * 60000);
 }
 
+/** The reverse of `localDateTimeToUtc`: a "YYYY-MM-DDTHH:MM" wall-clock
+ * value in `timeZone`, for pre-filling a `datetime-local` input from a
+ * stored UTC instant. */
+export function toLocalDateTimeInputValue(d: Date, timeZone: string = APP_TIMEZONE): string {
+  return `${localDayKey(d, timeZone)}T${localTimeString(d, timeZone)}`;
+}
+
+/** UTC instant for a "YYYY-MM-DDTHH:MM" wall-clock value (the format a
+ * native `datetime-local` input produces) in `timeZone`. Used to interpret
+ * an admin-entered local date/time as a real instant, independent of the
+ * browser's own timezone. Returns null for a malformed value. */
+export function localDateTimeToUtc(value: string, timeZone: string = APP_TIMEZONE): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value.trim());
+  if (!match) return null;
+  const [year, month, day, hour, minute] = match.slice(1).map(Number);
+  if (hour! > 23 || minute! > 59) return null;
+  const guess = new Date(Date.UTC(year!, month! - 1, day!, hour, minute));
+  const offsetMinutes = timeZoneOffsetMinutes(guess, timeZone);
+  return new Date(guess.getTime() - offsetMinutes * 60000);
+}
+
 function timeZoneOffsetMinutes(instant: Date, timeZone: string): number {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isoWeekday, startOfWeek, percentChange, formatChatDayLabel, isSameLocalDay, setLocalTimeOfDay, localTimeString } from './date';
+import { isoWeekday, startOfWeek, percentChange, formatChatDayLabel, isSameLocalDay, setLocalTimeOfDay, localTimeString, localDateTimeToUtc, toLocalDateTimeInputValue } from './date';
 
 describe('isoWeekday', () => {
   it('maps Sunday to 7, not 0', () => {
@@ -92,5 +92,29 @@ describe('setLocalTimeOfDay', () => {
   it('round-trips through localTimeString', () => {
     const result = setLocalTimeOfDay(new Date('2024-01-10T10:00:00Z'), '09:05')!;
     expect(localTimeString(result)).toBe('09:05');
+  });
+});
+
+describe('localDateTimeToUtc', () => {
+  it('interprets a datetime-local value as Berlin wall-clock time (CEST, +2)', () => {
+    // 1 Oct 2026 00:00 Berlin — still daylight saving (ends last Sunday of October).
+    const result = localDateTimeToUtc('2026-10-01T00:00')!;
+    expect(result.toISOString()).toBe('2026-09-30T22:00:00.000Z');
+  });
+
+  it('accounts for winter (CET, +1)', () => {
+    const result = localDateTimeToUtc('2026-01-15T09:30')!;
+    expect(result.toISOString()).toBe('2026-01-15T08:30:00.000Z');
+  });
+
+  it('rejects a malformed value instead of guessing', () => {
+    expect(localDateTimeToUtc('not-a-date')).toBeNull();
+    expect(localDateTimeToUtc('2026-10-01')).toBeNull();
+    expect(localDateTimeToUtc('2026-10-01T25:00')).toBeNull();
+  });
+
+  it('round-trips through toLocalDateTimeInputValue', () => {
+    const value = '2026-10-01T00:00';
+    expect(toLocalDateTimeInputValue(localDateTimeToUtc(value)!)).toBe(value);
   });
 });
