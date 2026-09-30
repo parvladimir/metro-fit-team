@@ -2,6 +2,7 @@ import { BackLink } from '@/components/ui/BackLink';
 import { requireTeamAdminMembership } from '@/lib/data/admin';
 import { getTeamRankingRules } from '@/lib/data/team';
 import { updateRankingRulesAction } from './actions';
+import { toLocalDateTimeInputValue } from '@/lib/date';
 import { t } from '@/lib/i18n';
 
 export default async function RanglistenregelnPage() {
@@ -28,6 +29,22 @@ export default async function RanglistenregelnPage() {
         <Field label="Punkte für abgeschlossene Einzel-Challenge" name="pointsChallengeCompleted" defaultValue={rules.points_challenge_completed} />
         <Field label="Punkte für Team-Challenge-Teilnahme" name="pointsTeamChallengeParticipation" defaultValue={rules.points_team_challenge_participation} />
         <Field label={t('admin.rankingRules.dailyCap')} name="dailyCapPoints" defaultValue={rules.daily_cap_points} />
+
+        <div className="mt-2 border-t border-white/[0.08] pt-4">
+          <label className="label" htmlFor="pointsResetAt">Neuer Wettbewerb ab (optional)</label>
+          <input
+            id="pointsResetAt"
+            name="pointsResetAt"
+            type="datetime-local"
+            defaultValue={rules.points_reset_at ? toLocalDateTimeInputValue(new Date(rules.points_reset_at)) : ''}
+            className="input-field"
+          />
+          <p className="mt-1 text-xs text-neutral-500">
+            Punkte und Rangliste zählen nur Aktivität ab diesem Zeitpunkt. Bereits erfasste Trainings, Pläne und
+            Vorlagen bleiben unverändert erhalten — nur die Wettbewerbswertung startet neu. Leer lassen, um die
+            gesamte Vereinshistorie zu werten.
+          </p>
+        </div>
 
         <button type="submit" className="btn-primary">{t('common.saveChanges')}</button>
       </form>

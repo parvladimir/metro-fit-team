@@ -1769,4 +1769,167 @@ describeIntegration('Row Level Security', () => {
       await admin.auth.admin.deleteUser(leaving.id).catch(() => undefined);
     });
   });
+
+  describe('team points reset (points_reset_at)', () => {
+    let R: typeof userB;
+    // Matches the real target instant this feature was built for: 1 Oct 2026
+    // 00:00 Europe/Berlin, which is 2026-09-30T22:00:00Z (still CEST, +2).
+    const cutoffIso = '2026-10-01T00:00:00+02:00';
+
+    const finishAt = async (title: string, minutes: number, at: Date) => {
+      const { data: w } = await R.client
+        .from('workouts')
+        .insert({
+          user_id: R.id,
+          team_id: teamId,
+          activity_type: 'krafttraining',
+          status: 'laeuft',
+          title,
+          started_at: new Date(at.getTime() - minutes * 60000).toISOString(),
+        })
+        .select('id')
+        .single();
+      const res = await R.client
+        .from('workouts')
+        .update({ status: 'abgeschlossen', finished_at: at.toISOString(), duration_seconds: minutes * 60 })
+        .eq('id', w!.id);
+      expect(res.error).toBeNull();
+      return w!.id as string;
+    };
+
+    const allTimePoints = async (): Promise<number> => {
+      const { data } = await userA.client.rpc('get_team_ranking', { p_team_id: teamId, p_period: 'all_time' });
+      const rows = (data ?? []) as { user_id: string; points: number }[];
+      return Number(rows.find((r) => r.user_id === R.id)?.points ?? 0);
+    };
+
+    beforeAll(async () => {
+      R = await createTestUser('points-reset');
+      await admin.from('team_members').insert({ team_id: teamId, user_id: R.id, role: 'member' });
+    });
+    afterAll(async () => {
+      await admin.from('team_ranking_rules').update({ points_reset_at: null }).eq('team_id', teamId);
+      await admin.auth.admin.deleteUser(R.id).catch(() => undefined);
+    });
+
+    it('103. before any cutoff is set, all_time ranking includes everything (baseline, unaffected)', async () => {
+      await finishAt('vor jedem Cutoff', 30, new Date('2026-09-28T10:00:00Z'));
+      expect(await allTimePoints()).toBeGreaterThan(0);
+    });
+
+    it('104. setting the cutoff excludes pre-cutoff points from ranking without touching the ledger row', async () => {
+      // 20 min, deliberately under the 30-min duration-bonus threshold, so
+      // this workout produces exactly one score event (workout_completed).
+      const preId = await finishAt('vor dem Cutoff', 20, new Date('2026-09-29T10:00:00Z'));
+      const before = await allTimePoints();
+      expect(before).toBeGreaterThan(0);
+
+      const set = await admin.from('team_ranking_rules').update({ points_reset_at: cutoffIso }).eq('team_id', teamId);
+      expect(set.error).toBeNull();
+      expect(await allTimePoints()).toBe(0);
+
+      // The ledger itself is untouched — personal history survives in full.
+      const { data: ev } = await admin.from('fitness_score_events').select('id, points').eq('source_entity_id', preId);
+      expect(ev).toHaveLength(1);
+      expect(ev![0]!.points).toBeGreaterThan(0);
+    });
+
+    it('105. a post-cutoff workout scores into the ranking normally', async () => {
+      await finishAt('nach dem Cutoff', 30, new Date('2026-10-02T09:00:00Z'));
+      expect(await allTimePoints()).toBeGreaterThan(0);
+    });
+
+    it('106. the exact boundary instant is inclusive, and the timezone conversion is not a naive UTC date cast', async () => {
+      const before = await allTimePoints();
+      // 08:00 Berlin on 30 Sep — unambiguously BEFORE the cutoff. A naive
+      // `points_reset_at::date` cast under this database's UTC session
+      // timezone would equal '2026-09-30' too, wrongly including this.
+      await finishAt('30. Sep morgens Berlin', 20, new Date('2026-09-30T06:00:00Z'));
+      expect(await allTimePoints()).toBe(before);
+
+      // 09:00 Berlin on 1 Oct — unambiguously AFTER the cutoff either way.
+      const afterUnambiguous = await finishAt('1. Okt morgens', 20, new Date('2026-10-01T07:00:00Z'));
+      expect(await allTimePoints()).toBeGreaterThan(before);
+
+      const { data: ev } = await admin.from('fitness_score_events').select('points').eq('source_entity_id', afterUnambiguous);
+      expect((ev ?? []).length).toBeGreaterThan(0);
+    });
+
+    it('107. editing/recalculating a pre-cutoff workout does not restore its points to the ranking', async () => {
+      const before = await allTimePoints();
+      const preId = await finishAt('alt, wird bearbeitet', 25, new Date('2026-09-27T10:00:00Z'));
+      expect(await allTimePoints()).toBe(before); // still pre-cutoff, no change expected
+
+      const edit = await R.client.rpc('update_own_workout', {
+        p_workout_id: preId,
+        p_title: 'bearbeitet',
+        p_finished_at: new Date('2026-09-27T10:00:00Z').toISOString(),
+        p_duration_seconds: 40 * 60,
+        p_distance_km: null,
+        p_notes: null,
+      });
+      expect(edit.error).toBeNull();
+      expect(await allTimePoints()).toBe(before);
+    });
+
+    it('108. a historical challenge that completes after the cutoff still pays into the ledger but not into the reset ranking', async () => {
+      const before = await allTimePoints();
+      const { data: ch } = await admin
+        .from('challenges')
+        .insert({
+          team_id: teamId, title: 'Alte Challenge', challenge_type: 'individual', metric: 'custom',
+          target_value: 1, starts_at: '2026-09-20', ends_at: '2026-10-10', points_reward: 90, created_by: userA.id,
+        })
+        .select('id')
+        .single();
+      await admin.from('challenge_participants').insert({ challenge_id: ch!.id, user_id: R.id, progress_value: 1 });
+
+      const { data: paid } = await admin.from('fitness_score_events').select('points').eq('source_entity_id', ch!.id).eq('user_id', R.id).single();
+      expect(paid?.points).toBe(90); // ledger records it in full, regardless of the cutoff
+      expect(await allTimePoints()).toBe(before); // but it does not count toward the reset ranking
+
+      await admin.from('challenges').delete().eq('id', ch!.id);
+    });
+
+    it('109. a challenge starting on/after the cutoff pays into the ranking normally', async () => {
+      const before = await allTimePoints();
+      const { data: ch } = await admin
+        .from('challenges')
+        .insert({
+          team_id: teamId, title: 'Neue Challenge', challenge_type: 'individual', metric: 'custom',
+          target_value: 1, starts_at: '2026-10-01', ends_at: '2026-10-10', points_reward: 65, created_by: userA.id,
+        })
+        .select('id')
+        .single();
+      await admin.from('challenge_participants').insert({ challenge_id: ch!.id, user_id: R.id, progress_value: 1 });
+
+      expect(await allTimePoints()).toBe(before + 65);
+      await admin.from('challenges').delete().eq('id', ch!.id);
+    });
+
+    it('110. setting the identical cutoff again changes nothing (idempotent)', async () => {
+      const before = await allTimePoints();
+      const set = await admin.from('team_ranking_rules').update({ points_reset_at: cutoffIso }).eq('team_id', teamId);
+      expect(set.error).toBeNull();
+      expect(await allTimePoints()).toBe(before);
+    });
+
+    it('111. a second team with no cutoff set is completely unaffected by this team’s cutoff', async () => {
+      await admin.from('fitness_score_events').insert({
+        user_id: outsider.id, team_id: outsiderTeamId, event_type: 'workout_completed', points: 42, event_date: '2020-01-01',
+      });
+      const { data, error } = await outsider.client.rpc('get_team_ranking', { p_team_id: outsiderTeamId, p_period: 'all_time' });
+      expect(error).toBeNull();
+      const row = (data ?? []).find((r: { user_id: string }) => r.user_id === outsider.id) as { points: number } | undefined;
+      expect(row?.points).toBeGreaterThanOrEqual(42);
+    });
+
+    it('112. a non-admin member cannot set points_reset_at (existing admin-only RLS)', async () => {
+      const before = await admin.from('team_ranking_rules').select('points_reset_at').eq('team_id', teamId).single();
+      const attempt = await R.client.from('team_ranking_rules').update({ points_reset_at: null }).eq('team_id', teamId).select('team_id');
+      expect(attempt.data ?? []).toEqual([]);
+      const after = await admin.from('team_ranking_rules').select('points_reset_at').eq('team_id', teamId).single();
+      expect(after.data?.points_reset_at).toBe(before.data?.points_reset_at);
+    });
+  });
 });

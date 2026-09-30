@@ -98,7 +98,6 @@ export async function getDashboardData(profile: Profile, teamId: string | null):
   const rows = (comparison ?? []) as ComparisonRow[];
   const pointsRow = rows.find((r) => r.metric === 'points');
   const workoutsRow = rows.find((r) => r.metric === 'workouts');
-  const points = pointsRow ? Math.round(pointsRow.current_value) : 0;
 
   const pctChange = (current: number, previous: number): number | null => {
     if (previous === 0) return current > 0 ? 100 : null;
@@ -107,6 +106,7 @@ export async function getDashboardData(profile: Profile, teamId: string | null):
 
   let rank: number | null = null;
   let rankInfo: DashboardData['rankInfo'] = { teamSize: 0, pointsToNext: null };
+  let points = pointsRow ? Math.round(pointsRow.current_value) : 0;
   if (teamId) {
     const sorted = (rankingRows ?? []) as { user_id: string; points: number }[];
     const idx = sorted.findIndex((r) => r.user_id === profile.id);
@@ -115,6 +115,15 @@ export async function getDashboardData(profile: Profile, teamId: string | null):
       teamSize: sorted.length,
       pointsToNext: idx > 0 ? Math.max(0, Number(sorted[idx - 1]!.points) - Number(sorted[idx]!.points)) : null,
     };
+    // Source the tile from the same, already period-aware ranking query used
+    // for the rank card just above, rather than the separate (never
+    // period-filtered) get_weekly_comparison figure — this is what guarantees
+    // the points tile and the team ranking list always agree, including once
+    // a team sets a points_reset_at cutoff (get_team_ranking.sql). Absence
+    // from the ranking means zero points this period (the RPC call itself
+    // succeeded), so this must not fall back to the unfiltered figure below —
+    // that fallback is only for the no-team case.
+    points = idx >= 0 ? Number(sorted[idx]!.points) : 0;
   }
 
   let todayPlanDay: DashboardData['todayPlanDay'] = null;

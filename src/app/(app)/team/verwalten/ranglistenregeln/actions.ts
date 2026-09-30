@@ -3,12 +3,15 @@
 import { revalidatePath } from 'next/cache';
 import { createClient } from '@/lib/supabase/server';
 import { requireTeamAdminMembership } from '@/lib/data/admin';
+import { localDateTimeToUtc } from '@/lib/date';
 
 export async function updateRankingRulesAction(formData: FormData) {
   const admin = await requireTeamAdminMembership();
   const supabase = await createClient();
 
   const numeric = (key: string) => Number(formData.get(key));
+  const resetAtRaw = String(formData.get('pointsResetAt') || '').trim();
+  const pointsResetAt = resetAtRaw ? localDateTimeToUtc(resetAtRaw)?.toISOString() ?? null : null;
 
   await supabase
     .from('team_ranking_rules')
@@ -23,6 +26,7 @@ export async function updateRankingRulesAction(formData: FormData) {
       points_challenge_completed: numeric('pointsChallengeCompleted'),
       points_team_challenge_participation: numeric('pointsTeamChallengeParticipation'),
       daily_cap_points: numeric('dailyCapPoints'),
+      points_reset_at: pointsResetAt,
       updated_by: admin.user_id,
     })
     .eq('team_id', admin.team_id);

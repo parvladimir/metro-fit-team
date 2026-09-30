@@ -317,6 +317,10 @@ export interface TeamRankingRules {
   points_challenge_completed: number;
   points_team_challenge_participation: number;
   daily_cap_points: number;
+  /** When set, ranking/points only count activity from this instant on —
+   * a fresh competition start for this team. Historical rows are never
+   * touched; this is a read-time filter in get_team_ranking(). */
+  points_reset_at: string | null;
   updated_at: string;
   updated_by: string | null;
 }

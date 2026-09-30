@@ -53,6 +53,10 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
 
   const activeChallenge = challenges.find((c) => new Date(c.ends_at) >= new Date());
   const myRankIndex = ranking.findIndex((r) => r.userId === user.id);
+  // A tie at zero (everyone, right after a reset) must never read as "you're
+  // #1" just because of array order — no rank badge until someone actually
+  // has points in this period.
+  const allZero = ranking.every((r) => r.points === 0);
 
   return (
     <div className="screen-padding flex flex-col gap-5 pb-4">
@@ -135,7 +139,7 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
       <section className="card accent-team card-accent">
         <div className="mb-3 flex items-center justify-between">
           <p className="section-title">{t('team.ranking')}</p>
-          {myRankIndex >= 0 && <p className="text-xs font-semibold text-brand">{t('ranking.yourRank')}: #{myRankIndex + 1}</p>}
+          {myRankIndex >= 0 && !allZero && <p className="text-xs font-semibold text-brand">{t('ranking.yourRank')}: #{myRankIndex + 1}</p>}
         </div>
         {rankingRules && (
           <div className="-mt-1 mb-3">
@@ -155,7 +159,14 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
           ))}
         </div>
 
-        {ranking.every((r) => r.points === 0) ? (
+        {rankingRules?.points_reset_at && (
+          <p className="mb-3 text-xs text-neutral-500">
+            Für den Wettbewerb zählen Aktivitäten ab dem {formatGermanDate(rankingRules.points_reset_at)}. Deine
+            Trainingshistorie und Vorlagen bleiben erhalten.
+          </p>
+        )}
+
+        {allZero ? (
           <p className="py-4 text-center text-sm text-neutral-500">{t('ranking.empty')}</p>
         ) : (
           <ol className="flex flex-col gap-1">
