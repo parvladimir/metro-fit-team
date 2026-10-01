@@ -1,9 +1,12 @@
 import Link from 'next/link';
-import { Medal, Trophy, Dumbbell, PlusCircle, Timer, Zap, Moon, CalendarPlus } from 'lucide-react';
+import { Trophy, Dumbbell, PlusCircle, Timer, Zap, Moon, CalendarPlus } from 'lucide-react';
 import { getAuthUser, getCurrentProfile, getPrimaryTeamMembership } from '@/lib/data/profile';
 import { getDashboardData } from '@/lib/data/dashboard';
 import { getCoachData } from '@/lib/data/coach';
+import { getMessageReactions } from '@/lib/data/chat';
 import { CoachHeader } from '@/components/dashboard/CoachHeader';
+import { TeamActivityCard } from '@/components/dashboard/TeamActivityCard';
+import { NearbyRankCard } from '@/components/dashboard/NearbyRankCard';
 import { berlinWallClock, type CoachInput } from '@/lib/coach';
 import { ProgressRing } from '@/components/ui/ProgressRing';
 import { WeeklyChart } from '@/components/dashboard/WeeklyChart';
@@ -24,20 +27,27 @@ export default async function DashboardPage() {
   const goalPercent = data.weekly.weeklyGoal > 0 ? (data.weekly.completedWorkouts / data.weekly.weeklyGoal) * 100 : 0;
   const firstName = (profile.full_name || '').trim().split(/\s+/)[0] || '';
 
-  // Coach header: extra queries run in parallel; any failure falls back to a plain personal message.
-  const coach: Omit<CoachInput, 'firstName' | 'weekly'> = await getCoachData(profile, membership?.team_id ?? null, data).catch(() => ({
-    totalWorkouts: 1,
-    activeWorkout: null,
-    today: null,
-    challenge: null,
-    streakDays: 0,
-    rank: data.rank,
-    teamSize: data.rankInfo.teamSize,
-    pointsToNextRank: null,
-    justFinished: null,
-    record: null,
-    team: null,
-  }));
+  const activityMessageIds = data.teamActivity.members.flatMap((m) => m.workouts.map((w) => w.messageId));
+
+  // Coach header and today's team-activity reactions are independent of each
+  // other, so they run in parallel; a coach-data failure falls back to a
+  // plain personal message rather than breaking the page.
+  const [coach, activityReactions]: [Omit<CoachInput, 'firstName' | 'weekly'>, Awaited<ReturnType<typeof getMessageReactions>>] = await Promise.all([
+    getCoachData(profile, membership?.team_id ?? null, data).catch(() => ({
+      totalWorkouts: 1,
+      activeWorkout: null,
+      today: null,
+      challenge: null,
+      streakDays: 0,
+      rank: data.rank,
+      teamSize: data.rankInfo.teamSize,
+      pointsToNextRank: null,
+      justFinished: null,
+      record: null,
+      team: null,
+    })),
+    getMessageReactions(activityMessageIds),
+  ]);
   const coachInput: CoachInput = {
     ...coach,
     firstName,
@@ -97,20 +107,10 @@ export default async function DashboardPage() {
         </div>
       </section>
 
+      <TeamActivityCard summary={data.teamActivity} initialReactions={activityReactions} currentUserId={profile.id} />
+
       <div className="grid grid-cols-2 gap-3">
-        {/* DEIN TEAM */}
-        <Link href="/team" className="card accent-team card-accent press flex min-w-0 flex-col justify-between !p-4">
-          <div className="flex items-center gap-1.5">
-            <span className="icon-chip h-7 w-7">
-              <Medal size={15} strokeWidth={2} />
-            </span>
-            <p className="section-title min-w-0 break-words !text-[10px] !leading-tight !tracking-[0.03em] [hyphens:auto]">{t('dashboard.yourTeam')}</p>
-          </div>
-          <p className={`mt-3 text-3xl font-extrabold tracking-tight tabular-nums ${data.rank ? 'text-brand' : 'text-neutral-500'}`}>
-            {data.rank ? `#${data.rank}` : '–'}
-          </p>
-          <p className="text-xs text-neutral-500">{data.rank ? t('dashboard.rank', { rank: data.rank }) : t('dashboard.noRank')}</p>
-        </Link>
+        <NearbyRankCard data={data.nearbyRanking} />
 
         {/* HERAUSFORDERUNG */}
         <Link href="/team?tab=herausforderungen" className="card accent-challenge card-accent press flex min-w-0 flex-col justify-between !p-4">

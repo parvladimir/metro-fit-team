@@ -64,3 +64,5 @@ export async function getTeamRankingRules(teamId: string): Promise<TeamRankingRu
   const { data } = await supabase.from('team_ranking_rules').select('*').eq('team_id', teamId).maybeSingle();
   return data as TeamRankingRules | null;
 }
+
+export { computeRanks, isUnrankedTie, nearbyWindow, nextHigherRankGap, type ScoreRow, type RankedScoreRow, type NextRankGap } from '@/lib/ranking';

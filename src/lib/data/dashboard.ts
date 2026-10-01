@@ -1,7 +1,22 @@
 import 'server-only';
 import { createClient } from '@/lib/supabase/server';
 import { startOfWeek } from '@/lib/date';
+import { computeRanks, isUnrankedTie, nearbyWindow, nextHigherRankGap, type RankedScoreRow } from '@/lib/data/team';
+import { getTeamActivity, EMPTY_TEAM_ACTIVITY, type TeamActivitySummary } from '@/lib/data/team-activity';
 import type { Profile, Workout, WorkoutPlanDay, Challenge, ChallengeParticipant } from '@/types/database';
+
+export interface NearbyRankRow extends RankedScoreRow {
+  fullName: string;
+  avatarUrl: string | null;
+}
+
+export interface NearbyRanking {
+  /** The window itself, best-ranked first. */
+  rows: NearbyRankRow[];
+  myUserId: string;
+  /** Null when the user is already in the top scoring group. */
+  nextRank: { rank: number; pointsNeeded: number } | null;
+}
 
 export interface DashboardData {
   weekly: {
@@ -19,6 +34,11 @@ export interface DashboardData {
   todayWorkout: Workout | null;
   activeChallenge: (Challenge & { myProgress: number; participantCount: number }) | null;
   weeklyChart: { label: string; minutes: number }[];
+  /** "Heute im Team" — who on the team completed a workout today. */
+  teamActivity: TeamActivitySummary;
+  /** "Dein Platz" — null when the user has no ranked activity this period
+   * (fair "Noch keine Platzierung" territory, not an arbitrary #1). */
+  nearbyRanking: NearbyRanking | null;
 }
 
 export async function getDashboardData(profile: Profile, teamId: string | null): Promise<DashboardData> {
@@ -41,6 +61,7 @@ export async function getDashboardData(profile: Profile, teamId: string | null):
     { data: activePlan },
     { data: todayWorkout },
     { data: challenge },
+    teamActivity,
   ] = await Promise.all([
     supabase
       .from('workouts')
@@ -73,11 +94,22 @@ export async function getDashboardData(profile: Profile, teamId: string | null):
           .limit(1)
           .maybeSingle()
       : Promise.resolve({ data: null }),
+    teamId ? getTeamActivity(teamId, 'today') : Promise.resolve(EMPTY_TEAM_ACTIVITY),
   ]);
 
-  // Second wave: these two depend on results from the first wave, but are
+  // Second wave: these depend on results from the first wave, but are
   // independent of each other, so they still only cost one more round trip.
-  const [{ data: planDayRow }, { data: participants }] = await Promise.all([
+  let fullRanked: RankedScoreRow[] | null = null;
+  let windowRanks: RankedScoreRow[] | null = null;
+  if (teamId) {
+    const scoreRows = ((rankingRows ?? []) as { user_id: string; points: number }[]).map((r) => ({ userId: r.user_id, points: Number(r.points) }));
+    if (!isUnrankedTie(scoreRows)) {
+      fullRanked = computeRanks(scoreRows);
+      windowRanks = nearbyWindow(fullRanked, profile.id);
+    }
+  }
+
+  const [{ data: planDayRow }, { data: participants }, { data: nearbyProfiles }] = await Promise.all([
     activePlan
       ? supabase
           .from('workout_plan_days')
@@ -88,6 +120,12 @@ export async function getDashboardData(profile: Profile, teamId: string | null):
       : Promise.resolve({ data: null }),
     challenge
       ? supabase.from('challenge_participants').select('user_id, progress_value').eq('challenge_id', challenge.id)
+      : Promise.resolve({ data: null }),
+    windowRanks && windowRanks.length > 0
+      ? supabase
+          .from('profiles')
+          .select('id, full_name, avatar_url')
+          .in('id', windowRanks.map((r) => r.userId))
       : Promise.resolve({ data: null }),
   ]);
 
@@ -146,6 +184,20 @@ export async function getDashboardData(profile: Profile, teamId: string | null):
     activeChallenge = { ...(challenge as Challenge), myProgress, participantCount: participantRows.length };
   }
 
+  let nearbyRanking: DashboardData['nearbyRanking'] = null;
+  if (windowRanks && windowRanks.length > 0 && fullRanked) {
+    const profileMap = new Map((nearbyProfiles ?? []).map((p) => [p.id, p]));
+    nearbyRanking = {
+      rows: windowRanks.map((r) => ({
+        ...r,
+        fullName: profileMap.get(r.userId)?.full_name || '—',
+        avatarUrl: profileMap.get(r.userId)?.avatar_url ?? null,
+      })),
+      myUserId: profile.id,
+      nextRank: nextHigherRankGap(fullRanked, profile.id),
+    };
+  }
+
   const weeklyChart = buildWeeklyChart(completedThisWeek ?? [], weekStart);
 
   return {
@@ -163,6 +215,8 @@ export async function getDashboardData(profile: Profile, teamId: string | null):
     todayWorkout: (todayWorkout as Workout) ?? null,
     activeChallenge,
     weeklyChart,
+    teamActivity,
+    nearbyRanking,
   };
 }
 

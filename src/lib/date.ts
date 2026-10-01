@@ -110,6 +110,45 @@ export function localDateTimeToUtc(value: string, timeZone: string = APP_TIMEZON
   return new Date(guess.getTime() - offsetMinutes * 60000);
 }
 
+function addDaysToKey(dayKey: string, days: number): string {
+  const [y, m, d] = dayKey.split('-').map(Number);
+  return new Date(Date.UTC(y!, m! - 1, d! + days)).toISOString().slice(0, 10);
+}
+
+function isoWeekdayFromKey(dayKey: string): number {
+  const day = new Date(`${dayKey}T00:00:00Z`).getUTCDay(); // 0 = Sunday
+  return day === 0 ? 7 : day;
+}
+
+/** [start, end) UTC instants for one Berlin-local calendar day — each
+ * boundary converted independently via the DST-aware `localDateTimeToUtc`,
+ * so a 23h/25h DST-transition day still gets its real midnight-to-midnight
+ * span, not a fixed 24h added to `start`. `dayOffset`: 0 = today, -1 =
+ * yesterday. */
+export function berlinDayRange(dayOffset = 0, now: Date = new Date(), timeZone: string = APP_TIMEZONE): { start: Date; end: Date } {
+  const dayKey = addDaysToKey(localDayKey(now, timeZone), dayOffset);
+  const nextDayKey = addDaysToKey(dayKey, 1);
+  return {
+    start: localDateTimeToUtc(`${dayKey}T00:00`, timeZone)!,
+    end: localDateTimeToUtc(`${nextDayKey}T00:00`, timeZone)!,
+  };
+}
+
+/** [start, end) UTC instants for the current Berlin-local ISO week (Monday
+ * 00:00 to next Monday 00:00). Deliberately not built on the existing
+ * `startOfWeek()`, which uses the server runtime's own local time rather
+ * than Berlin — the day-of-week itself is derived from the Berlin calendar
+ * key, not from `Date#getDay()`, so this stays correct close to midnight on
+ * a UTC server regardless of the host's own timezone. */
+export function berlinWeekRange(now: Date = new Date(), timeZone: string = APP_TIMEZONE): { start: Date; end: Date } {
+  const todayKey = localDayKey(now, timeZone);
+  const mondayKey = addDaysToKey(todayKey, -(isoWeekdayFromKey(todayKey) - 1));
+  return {
+    start: localDateTimeToUtc(`${mondayKey}T00:00`, timeZone)!,
+    end: localDateTimeToUtc(`${addDaysToKey(mondayKey, 7)}T00:00`, timeZone)!,
+  };
+}
+
 function timeZoneOffsetMinutes(instant: Date, timeZone: string): number {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone,

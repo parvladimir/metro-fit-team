@@ -1932,4 +1932,168 @@ describeIntegration('Row Level Security', () => {
       expect(after.data?.points_reset_at).toBe(before.data?.points_reset_at);
     });
   });
+
+  describe('team workout activity ("Heute im Team")', () => {
+    let W1: typeof userB;
+    let W2: typeof userB;
+
+    type ActivityRow = { workout_id: string; user_id: string; message_id: string };
+
+    const finish = async (user: typeof userB, minutes: number, at: Date) => {
+      const { data: w } = await user.client
+        .from('workouts')
+        .insert({
+          user_id: user.id,
+          team_id: teamId,
+          activity_type: 'krafttraining',
+          status: 'laeuft',
+          title: 'Testtraining',
+          started_at: new Date(at.getTime() - minutes * 60000).toISOString(),
+        })
+        .select('id')
+        .single();
+      const res = await user.client.from('workouts').update({ status: 'abgeschlossen', finished_at: at.toISOString(), duration_seconds: minutes * 60 }).eq('id', w!.id);
+      expect(res.error).toBeNull();
+      return w!.id as string;
+    };
+
+    const messageIdFor = async (workoutId: string): Promise<string> => {
+      const { data } = await admin.from('messages').select('id').eq('workout_id', workoutId).eq('event_type', 'workout_completed').single();
+      return data!.id as string;
+    };
+
+    const activityToday = async (asUser = userA): Promise<{ data: ActivityRow[]; error: unknown }> => {
+      const start = new Date(Date.now() - 20 * 3600 * 1000); // a wide, safely-inclusive "today" window for this test's purposes
+      const end = new Date(Date.now() + 4 * 3600 * 1000);
+      const { data, error } = await asUser.client.rpc('get_team_workout_activity', {
+        p_team_id: teamId,
+        p_range_start: start.toISOString(),
+        p_range_end: end.toISOString(),
+      });
+      return { data: (data ?? []) as ActivityRow[], error };
+    };
+
+    beforeAll(async () => {
+      W1 = await createTestUser('activity-w1');
+      W2 = await createTestUser('activity-w2');
+      await admin.from('team_members').insert([
+        { team_id: teamId, user_id: W1.id, role: 'member' },
+        { team_id: teamId, user_id: W2.id, role: 'member' },
+      ]);
+    });
+    afterAll(async () => {
+      await admin.from('team_members').delete().eq('team_id', teamId).in('user_id', [W1.id, W2.id]);
+      for (const u of [W1, W2]) await admin.auth.admin.deleteUser(u.id).catch(() => undefined);
+    });
+
+    it('113. two members each completing one workout are both returned, each keyed by their own canonical chat message id', async () => {
+      const now = new Date();
+      const id1 = await finish(W1, 30, now);
+      const id2 = await finish(W2, 25, now);
+      const { data, error } = await activityToday();
+      expect(error).toBeNull();
+      const row1 = data.find((r) => r.workout_id === id1)!;
+      const row2 = data.find((r) => r.workout_id === id2)!;
+      expect(row1.user_id).toBe(W1.id);
+      expect(row2.user_id).toBe(W2.id);
+      expect(row1.message_id).not.toBe(row2.message_id);
+      expect(row1.message_id).toBe(await messageIdFor(id1));
+    });
+
+    it('114. one member finishing two workouts produces two independent rows, never merged', async () => {
+      const now = new Date();
+      const idA = await finish(W1, 20, new Date(now.getTime() - 3600000));
+      const idB = await finish(W1, 20, now);
+      const { data } = await activityToday();
+      const mine = data.filter((r) => r.workout_id === idA || r.workout_id === idB);
+      expect(mine).toHaveLength(2);
+      expect(mine.every((r) => r.user_id === W1.id)).toBe(true);
+      expect(new Set(mine.map((r) => r.message_id)).size).toBe(2);
+    });
+
+    it('115. an opted-out member\'s workout is excluded from rows entirely, without deleting the workout itself', async () => {
+      await admin.from('privacy_settings').upsert({ user_id: W1.id, activity_feed_opt_in: false });
+      const id = await finish(W1, 30, new Date());
+      const { data } = await activityToday();
+      expect(data.some((r) => r.workout_id === id)).toBe(false);
+      const { data: w } = await admin.from('workouts').select('id').eq('id', id).single();
+      expect(w?.id).toBe(id); // privacy, not deletion
+      await admin.from('privacy_settings').upsert({ user_id: W1.id, activity_feed_opt_in: true });
+    });
+
+    it('116. a workout stuck awaiting the long-duration confirmation gate (still status=laeuft) is excluded', async () => {
+      const { data: w } = await W2.client
+        .from('workouts')
+        .insert({ user_id: W2.id, team_id: teamId, activity_type: 'laufen', status: 'laeuft', started_at: new Date(Date.now() - 4 * 3600 * 1000).toISOString() })
+        .select('id')
+        .single();
+      const attempt = await W2.client.rpc('finish_own_workout', {
+        p_workout_id: w!.id,
+        p_finished_at: new Date().toISOString(),
+        p_duration_seconds: 12000,
+        p_distance_km: null,
+        p_notes: null,
+      });
+      expect(attempt.error).not.toBeNull(); // confirmation_required — status never reaches abgeschlossen
+      const { data } = await activityToday();
+      expect(data.some((r) => r.workout_id === w!.id)).toBe(false);
+      await admin.from('workouts').delete().eq('id', w!.id);
+    });
+
+    it('117. a deleted workout disappears from a subsequent call', async () => {
+      const id = await finish(W2, 15, new Date());
+      expect((await activityToday()).data.some((r) => r.workout_id === id)).toBe(true);
+      const del = await W2.client.rpc('delete_own_workout', { p_workout_id: id });
+      expect(del.error).toBeNull();
+      expect((await activityToday()).data.some((r) => r.workout_id === id)).toBe(false);
+    });
+
+    it('118. a member removed from the team after their workout posted is excluded going forward', async () => {
+      const id = await finish(W1, 15, new Date());
+      expect((await activityToday()).data.some((r) => r.workout_id === id)).toBe(true);
+      await admin.from('team_members').delete().eq('team_id', teamId).eq('user_id', W1.id);
+      expect((await activityToday()).data.some((r) => r.workout_id === id)).toBe(false);
+      await admin.from('team_members').insert({ team_id: teamId, user_id: W1.id, role: 'member' });
+    });
+
+    it('119. a non-member is rejected with not_a_team_member, not an empty or partial result', async () => {
+      const start = new Date(Date.now() - 86400000);
+      const { error } = await outsider.client.rpc('get_team_workout_activity', { p_team_id: teamId, p_range_start: start.toISOString(), p_range_end: new Date().toISOString() });
+      expect(error).not.toBeNull();
+      expect(error!.message).toContain('not_a_team_member');
+    });
+
+    it('120. get_team_running_count only counts a genuinely running session — not stale, not paused', async () => {
+      const { data: fresh } = await W2.client
+        .from('workouts')
+        .insert({ user_id: W2.id, team_id: teamId, activity_type: 'krafttraining', status: 'laeuft', started_at: new Date().toISOString() })
+        .select('id')
+        .single();
+      const { data: baseline } = await userA.client.rpc('get_team_running_count', { p_team_id: teamId });
+      expect(Number(baseline)).toBeGreaterThanOrEqual(1);
+
+      const { data: stale } = await W1.client
+        .from('workouts')
+        .insert({ user_id: W1.id, team_id: teamId, activity_type: 'krafttraining', status: 'laeuft', started_at: new Date(Date.now() - 200 * 60000).toISOString() })
+        .select('id')
+        .single();
+      const { data: afterStale } = await userA.client.rpc('get_team_running_count', { p_team_id: teamId });
+      expect(Number(afterStale)).toBe(Number(baseline)); // >180min old — never advertised as "live"
+
+      await admin.from('workouts').update({ paused_at: new Date().toISOString() }).eq('id', fresh!.id);
+      const { data: afterPause } = await userA.client.rpc('get_team_running_count', { p_team_id: teamId });
+      expect(Number(afterPause)).toBe(Number(baseline) - 1); // paused — also never "live"
+
+      await admin.from('workouts').delete().in('id', [fresh!.id, stale!.id]);
+    });
+
+    it('121. a reaction set on an activity message is the same row the ordinary chat reactions loader sees', async () => {
+      const id = await finish(W2, 15, new Date());
+      const messageId = await messageIdFor(id);
+      const setRes = await userA.client.rpc('set_message_reaction', { p_message_id: messageId, p_reaction_key: 'fire', p_active: true });
+      expect(setRes.error).toBeNull();
+      const { data: reactions } = await admin.from('message_reactions').select('user_id, reaction_type').eq('message_id', messageId);
+      expect(reactions?.some((r) => r.user_id === userA.id && r.reaction_type === 'fire')).toBe(true);
+    });
+  });
 });

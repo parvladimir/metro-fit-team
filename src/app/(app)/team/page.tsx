@@ -2,7 +2,7 @@ import Link from 'next/link';
 import clsx from 'clsx';
 import { QrCode, MessageCircle, Trophy, ChevronRight, Users, AtSign, Layers } from 'lucide-react';
 import { requireAuthUser, getCurrentProfile, getPrimaryTeamMembership } from '@/lib/data/profile';
-import { getTeamRankingWithProfiles, getTeamRankingRules, type RankingPeriod } from '@/lib/data/team';
+import { getTeamRankingWithProfiles, getTeamRankingRules, isUnrankedTie, type RankingPeriod } from '@/lib/data/team';
 import { PointsRulesSheet } from '@/components/team/PointsRulesSheet';
 import { getTeamChallenges } from '@/lib/data/challenges';
 import { getTeamActivityFeed, renderFeedItem } from '@/lib/data/feed';
@@ -56,7 +56,7 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
   // A tie at zero (everyone, right after a reset) must never read as "you're
   // #1" just because of array order — no rank badge until someone actually
   // has points in this period.
-  const allZero = ranking.every((r) => r.points === 0);
+  const allZero = isUnrankedTie(ranking);
 
   return (
     <div className="screen-padding flex flex-col gap-5 pb-4">
