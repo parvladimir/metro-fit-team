@@ -1,5 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { isoWeekday, startOfWeek, percentChange, formatChatDayLabel, isSameLocalDay, setLocalTimeOfDay, localTimeString, localDateTimeToUtc, toLocalDateTimeInputValue } from './date';
+import {
+  isoWeekday,
+  startOfWeek,
+  percentChange,
+  formatChatDayLabel,
+  isSameLocalDay,
+  setLocalTimeOfDay,
+  localTimeString,
+  localDateTimeToUtc,
+  toLocalDateTimeInputValue,
+  berlinDayRange,
+  berlinWeekRange,
+} from './date';
 
 describe('isoWeekday', () => {
   it('maps Sunday to 7, not 0', () => {
@@ -116,5 +128,48 @@ describe('localDateTimeToUtc', () => {
   it('round-trips through toLocalDateTimeInputValue', () => {
     const value = '2026-10-01T00:00';
     expect(toLocalDateTimeInputValue(localDateTimeToUtc(value)!)).toBe(value);
+  });
+});
+
+describe('berlinDayRange', () => {
+  it('spans 25 hours on the CEST->CET fall-back day (2026-10-25)', () => {
+    const { start, end } = berlinDayRange(0, new Date('2026-10-25T12:00:00Z'));
+    expect(start.toISOString()).toBe('2026-10-24T22:00:00.000Z');
+    expect(end.toISOString()).toBe('2026-10-25T23:00:00.000Z');
+    expect(end.getTime() - start.getTime()).toBe(25 * 3600 * 1000);
+  });
+
+  it('spans 23 hours on the CET->CEST spring-forward day (2026-03-29)', () => {
+    const { start, end } = berlinDayRange(0, new Date('2026-03-29T12:00:00Z'));
+    expect(start.toISOString()).toBe('2026-03-28T23:00:00.000Z');
+    expect(end.toISOString()).toBe('2026-03-29T22:00:00.000Z');
+    expect(end.getTime() - start.getTime()).toBe(23 * 3600 * 1000);
+  });
+
+  it('dayOffset=-1 ("Gestern") correctly resolves a transition day from the day after it', () => {
+    const { start, end } = berlinDayRange(-1, new Date('2026-03-30T12:00:00Z'));
+    expect(start.toISOString()).toBe('2026-03-28T23:00:00.000Z');
+    expect(end.toISOString()).toBe('2026-03-29T22:00:00.000Z');
+  });
+
+  it('is an ordinary 24h span on a non-transition day', () => {
+    const { start, end } = berlinDayRange(0, new Date('2026-01-15T12:00:00Z'));
+    expect(start.toISOString()).toBe('2026-01-14T23:00:00.000Z');
+    expect(end.toISOString()).toBe('2026-01-15T23:00:00.000Z');
+  });
+});
+
+describe('berlinWeekRange', () => {
+  it('computes Monday 00:00 Berlin to next Monday 00:00 Berlin', () => {
+    const { start, end } = berlinWeekRange(new Date('2026-10-28T10:00:00Z')); // Wednesday, week of Mon Oct 26 - Sun Nov 1
+    expect(start.toISOString()).toBe('2026-10-25T23:00:00.000Z');
+    expect(end.toISOString()).toBe('2026-11-01T23:00:00.000Z');
+  });
+
+  it('spans an extra hour for the week containing the fall-back transition', () => {
+    const { start, end } = berlinWeekRange(new Date('2026-10-21T10:00:00Z')); // Wednesday, week of Mon Oct 19 - Sun Oct 25 (transition day)
+    expect(start.toISOString()).toBe('2026-10-18T22:00:00.000Z');
+    expect(end.toISOString()).toBe('2026-10-25T23:00:00.000Z');
+    expect(end.getTime() - start.getTime()).toBe(7 * 24 * 3600 * 1000 + 3600 * 1000);
   });
 });

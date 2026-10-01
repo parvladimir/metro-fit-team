@@ -235,6 +235,28 @@ describe('15/16. day-aware and variants', () => {
   });
 });
 
+describe('rest day', () => {
+  it('shows calm rest-day copy instead of generic movement filler, with no workout demand', () => {
+    const m = msg({ today: { planTitle: '', isRest: true, startHref: '/x', alreadyDone: false } });
+    expect(m.state).toBe('rest_day');
+    expect(m.line).toMatch(/Erholung/);
+    expect(m.cta).toEqual({ label: 'Team ansehen', href: '/team' });
+  });
+
+  it('a genuine celebration still takes priority over the rest-day message', () => {
+    const m = msg({
+      today: { planTitle: '', isRest: true, startHref: '/x', alreadyDone: false },
+      justFinished: { minutes: 20, points: 50 },
+    });
+    expect(m.state).toBe('celebrate');
+  });
+
+  it('an active workout still takes priority over the rest-day message', () => {
+    const m = msg({ today: { planTitle: '', isRest: true, startHref: '/x', alreadyDone: false }, activeWorkout: { id: 'w1' } });
+    expect(m.state).toBe('active');
+  });
+});
+
 describe('streak + helpers', () => {
   it('counts consecutive days, tolerating "not yet today"', () => {
     expect(computeStreakDays(['2026-09-16', '2026-09-15', '2026-09-14'], '2026-09-16')).toBe(3);

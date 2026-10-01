@@ -48,6 +48,7 @@ export interface CoachMessage {
     | 'challenge'
     | 'streak'
     | 'team'
+    | 'rest_day'
     | 'generic';
   accent: CoachAccent;
   greeting: string;
@@ -294,6 +295,21 @@ export function buildCoachMessage(input: CoachInput, now: Date, userSeed: string
       accent: 'spark',
       line: teamSentence(t, remaining, completed, seed),
       cta: { label: input.today?.isRest ? 'Plan ansehen' : 'Training starten', href: input.today?.isRest ? '/plan' : TRAIN },
+    };
+  }
+
+  // ---- 6c. declared rest day (nothing more specific applied above) ----
+  // Only a fallback for the plain weekday filler below, which otherwise
+  // suggests movement ("Heute ist ein guter Tag für Bewegung.") on a day
+  // explicitly planned as rest — never demands a workout, never blocks a
+  // genuine celebration/streak/challenge line that already fired above.
+  if (input.today?.isRest) {
+    return {
+      ...base,
+      state: 'rest_day',
+      accent: 'spark',
+      line: pick(['Heute ist Erholung eingeplant.', 'Heute steht Erholung auf deinem Plan.'], seed),
+      cta: { label: 'Team ansehen', href: '/team' },
     };
   }
 
