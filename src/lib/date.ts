@@ -63,6 +63,13 @@ export function formatChatDayLabel(date: Date, now: Date = new Date(), timeZone:
   return `${weekday}., ${day}.${m}.${y}`;
 }
 
+/** "Sa., 03.10." for a YYYY-MM-DD calendar key — weekday and day.month, no
+ * year: a compact label for dates a few days either side of today. */
+export function formatDayKeyShort(dayKey: string): string {
+  const [, month, day] = dayKey.split('-');
+  return `${WEEKDAY_ABBR_DE[new Date(`${dayKey}T00:00:00Z`).getUTCDay()]}., ${day}.${month}.`;
+}
+
 /** HH:MM wall-clock time of a timestamp in the given timezone (for pre-filling
  * a same-day time-correction input). */
 export function localTimeString(d: Date, timeZone: string = APP_TIMEZONE): string {
@@ -110,7 +117,68 @@ export function localDateTimeToUtc(value: string, timeZone: string = APP_TIMEZON
   return new Date(guess.getTime() - offsetMinutes * 60000);
 }
 
-function addDaysToKey(dayKey: string, days: number): string {
+/** What a "YYYY-MM-DDTHH:MM" wall-clock value means in a time zone.
+ *
+ * - `ok`        exactly one instant has that wall-clock reading.
+ * - `ambiguous` the clocks go back and the reading occurs twice (Berlin:
+ *               02:00–02:59 on the last Sunday of October). `first` is the
+ *               earlier instant (summer time), `second` the later (winter time).
+ * - `gap`       the clocks jump forward and the reading never occurs (Berlin:
+ *               02:00–02:59 on the last Sunday of March). `before` is the
+ *               instant the reading would be if the clocks had not yet jumped
+ *               (it displays an hour earlier), `after` the one if they already
+ *               had (it displays an hour later) — the two nearest real times.
+ * - `invalid`   not a real calendar date/time, or not in the expected format.
+ */
+export type LocalDateTimeResolution =
+  | { kind: 'ok'; instant: Date }
+  | { kind: 'ambiguous'; first: Date; second: Date }
+  | { kind: 'gap'; before: Date; after: Date }
+  | { kind: 'invalid' };
+
+/** The stricter sibling of `localDateTimeToUtc`: that one silently picks an
+ * answer for a DST gap or overlap, which is right for end-of-workout
+ * corrections but wrong when someone schedules a future event and would
+ * otherwise get a time they never typed. This reports the situation so the
+ * caller can ask. A value that is neither in a gap nor an overlap resolves to
+ * exactly what `localDateTimeToUtc` returns for it. */
+export function resolveLocalDateTime(value: string, timeZone: string = APP_TIMEZONE): LocalDateTimeResolution {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value.trim());
+  if (!match) return { kind: 'invalid' };
+  const [year, month, day, hour, minute] = match.slice(1).map(Number) as [number, number, number, number, number];
+  if (year < 1000 || hour > 23 || minute > 59) return { kind: 'invalid' };
+  const calendar = new Date(Date.UTC(year, month - 1, day));
+  if (calendar.getUTCFullYear() !== year || calendar.getUTCMonth() !== month - 1 || calendar.getUTCDate() !== day) {
+    return { kind: 'invalid' };
+  }
+
+  // The wall-clock reading as if it were UTC, then each UTC offset the zone
+  // uses within a day either side of it: a candidate instant is real only if
+  // the zone actually has that offset at that instant.
+  const wall = Date.UTC(year, month - 1, day, hour, minute);
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const offsets = new Set([
+    timeZoneOffsetMinutes(new Date(wall - DAY_MS), timeZone),
+    timeZoneOffsetMinutes(new Date(wall + DAY_MS), timeZone),
+  ]);
+  const instants = [...offsets]
+    .map((offset) => ({ offset, instant: new Date(wall - offset * 60000) }))
+    .filter(({ offset, instant }) => timeZoneOffsetMinutes(instant, timeZone) === offset)
+    .map(({ instant }) => instant)
+    .sort((a, b) => a.getTime() - b.getTime());
+
+  if (instants.length === 1) return { kind: 'ok', instant: instants[0]! };
+  if (instants.length === 2) return { kind: 'ambiguous', first: instants[0]!, second: instants[1]! };
+
+  // A gap: no candidate round-trips. Offer the two readings the value could
+  // have meant (before / after the clocks jumped).
+  const [a, b] = [...offsets].map((offset) => new Date(wall - offset * 60000)).sort((x, y) => x.getTime() - y.getTime());
+  return { kind: 'gap', before: a!, after: b! };
+}
+
+/** Calendar-date arithmetic on a YYYY-MM-DD key (pure date math, no time zone
+ * involved — adding days to a date key is the same in every zone). */
+export function addDaysToKey(dayKey: string, days: number): string {
   const [y, m, d] = dayKey.split('-').map(Number);
   return new Date(Date.UTC(y!, m! - 1, d! + days)).toISOString().slice(0, 10);
 }

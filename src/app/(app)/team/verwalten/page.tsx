@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { Users, Link2, Trophy, Scale, Tag, ScrollText, ChevronRight } from 'lucide-react';
+import { Users, Link2, Trophy, Scale, Tag, ScrollText, ChartColumn, ChevronRight } from 'lucide-react';
 import { BackLink } from '@/components/ui/BackLink';
 import { requireTeamAdminMembership } from '@/lib/data/admin';
 import { t } from '@/lib/i18n';
@@ -11,6 +11,7 @@ const LINKS = [
   { href: '/team/verwalten/ranglistenregeln', labelKey: 'admin.rankingRules', icon: Scale },
   { href: '/team/verwalten/einstellungen', labelKey: 'admin.teamSettings', icon: Tag },
   { href: '/team/verwalten/aktivitaeten', labelKey: 'admin.activity', icon: ScrollText },
+  { href: '/team/verwalten/auswertung', labelKey: 'admin.engagement', icon: ChartColumn },
 ] as const;
 
 export default async function TeamVerwaltenPage() {

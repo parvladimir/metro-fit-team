@@ -10,8 +10,9 @@
  *
  * against a project whose migrations + seed.sql have already been applied.
  */
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { addDaysToKey, localDateTimeToUtc } from '@/lib/date';
 
 const RUN = process.env.RUN_INTEGRATION_TESTS === '1';
 const describeIntegration = RUN ? describe : describe.skip;
@@ -2354,6 +2355,1156 @@ describeIntegration('Row Level Security', () => {
       it('140. a user cannot set another user\'s notification preferences (existing owner-only RLS, unaffected by the new columns)', async () => {
         const attempt = await M2.client.from('notification_preferences').update({ quiet_hours_start: '08:00' }).eq('user_id', M1.id).select('user_id');
         expect(attempt.data ?? []).toEqual([]);
+      });
+    });
+  });
+
+  describe('Milestone C: duels, training invitations, opt-in notifications, evaluation', () => {
+    let cTeamId: string;
+    let C1: typeof userB; // admin
+    let C2: typeof userB; // member
+    let C3: typeof userB; // member
+
+    beforeAll(async () => {
+      const { data: team } = await admin
+        .from('teams')
+        .insert({ name: `Milestone C Test Team ${Date.now()}`, slug: `milestone-c-${Date.now()}` })
+        .select('id')
+        .single();
+      cTeamId = team!.id;
+      C1 = await createTestUser('c-admin');
+      C2 = await createTestUser('c-member-2');
+      C3 = await createTestUser('c-member-3');
+      await admin.from('team_members').insert([
+        { team_id: cTeamId, user_id: C1.id, role: 'team_admin' },
+        { team_id: cTeamId, user_id: C2.id, role: 'member' },
+        { team_id: cTeamId, user_id: C3.id, role: 'member' },
+      ]);
+    });
+    afterAll(async () => {
+      await admin.from('teams').delete().eq('id', cTeamId);
+      for (const u of [C1, C2, C3]) await admin.auth.admin.deleteUser(u.id).catch(() => undefined);
+    });
+
+    describe('opt-in notification categories (duelle, gemeinsame_trainings)', () => {
+      const NINE_DEFAULT_ON = [
+        'chat_nachrichten', 'reaktionen_antworten', 'erwaehnungen', 'trainingserinnerung', 'wochenziel',
+        'messungserinnerung', 'herausforderung', 'team_aktivitaet', 'wochenzusammenfassung',
+      ];
+
+      it('141. both new categories default to FALSE on a fresh profile while the nine existing ones stay ON', async () => {
+        const { data, error } = await admin.from('notification_preferences').select('*').eq('user_id', C1.id).single();
+        expect(error).toBeNull();
+        expect(data!.duelle).toBe(false);
+        expect(data!.gemeinsame_trainings).toBe(false);
+        for (const category of NINE_DEFAULT_ON) expect(data![category], category).toBe(true);
+      });
+
+      it('142. a user can switch an opt-in on for themselves without touching the other categories or the other opt-in', async () => {
+        const before = (await admin.from('notification_preferences').select('*').eq('user_id', C2.id).single()).data!;
+        const res = await C2.client.from('notification_preferences').update({ duelle: true }).eq('user_id', C2.id).select('*').single();
+        expect(res.error).toBeNull();
+        expect(res.data!.duelle).toBe(true);
+        expect(res.data!.gemeinsame_trainings).toBe(false);
+        for (const category of NINE_DEFAULT_ON) expect(res.data![category], category).toBe(before[category]);
+        expect(res.data!.quiet_hours_start).toBe(before.quiet_hours_start);
+        expect(res.data!.motivation_paused_until).toBe(before.motivation_paused_until);
+
+        const off = await C2.client.from('notification_preferences').update({ duelle: false }).eq('user_id', C2.id).select('duelle').single();
+        expect(off.data!.duelle).toBe(false);
+      });
+
+      it('143. the new columns are covered by the existing owner-only RLS (no cross-user read or write, no anonymous read)', async () => {
+        const write = await C2.client.from('notification_preferences').update({ duelle: true, gemeinsame_trainings: true }).eq('user_id', C1.id).select('user_id');
+        expect(write.data ?? []).toEqual([]);
+        const { data: unchanged } = await admin.from('notification_preferences').select('duelle, gemeinsame_trainings').eq('user_id', C1.id).single();
+        expect(unchanged).toEqual({ duelle: false, gemeinsame_trainings: false });
+
+        const read = await C2.client.from('notification_preferences').select('duelle, gemeinsame_trainings').eq('user_id', C1.id);
+        expect(read.data ?? []).toEqual([]);
+
+        const anon = createClient(SUPABASE_URL, ANON_KEY);
+        const anonRead = await anon.from('notification_preferences').select('duelle').eq('user_id', C1.id);
+        expect(anonRead.data ?? []).toEqual([]);
+      });
+    });
+
+    describe('team duels (Freundschaftsduell)', () => {
+      type Who = typeof userB;
+      const GHOST_ID = '00000000-0000-4000-8000-000000000000';
+      const berlinToday = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Berlin' });
+      const dayKeyPlus = (days: number) => addDaysToKey(berlinToday(), days);
+      const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
+
+      const propose = (who: Who, invitee: string, target: number | null = 3, startsOn: string | null = dayKeyPlus(5), team: string = cTeamId) =>
+        who.client.rpc('propose_team_duel', { p_team_id: team, p_invitee_id: invitee, p_target_days: target, p_starts_on: startsOn });
+      const respond = (who: Who, duelId: string, accept: boolean) => who.client.rpc('respond_team_duel', { p_duel_id: duelId, p_accept: accept });
+      const cancel = (who: Who, duelId: string) => who.client.rpc('cancel_team_duel', { p_duel_id: duelId });
+      const progress = (who: Who, duelId: string) => who.client.rpc('get_duel_progress', { p_duel_id: duelId });
+      const countsOf = (res: { data: { participant_id: string; counted_days: number }[] | null }) =>
+        Object.fromEntries((res.data ?? []).map((r) => [r.participant_id, r.counted_days]));
+      const expectError = async (p: PromiseLike<{ error: { message: string } | null }>, text: string) => {
+        const r = await p;
+        expect(r.error?.message, text).toContain(text);
+      };
+      const resetDuels = async () => {
+        await admin.from('team_duels').delete().eq('team_id', cTeamId);
+      };
+      const duelRows = async () => (await admin.from('team_duels').select('*').eq('team_id', cTeamId)).data ?? [];
+      const statusOf = async (id: string) => (await admin.from('team_duels').select('status').eq('id', id).single()).data!.status as string;
+
+      /** Direct fixture insert (service role): pins dates/status the RPCs would refuse. */
+      const insertDuel = async (over: Record<string, unknown> = {}) => {
+        const startsOn = (over.starts_on as string | undefined) ?? dayKeyPlus(5);
+        const { data, error } = await admin
+          .from('team_duels')
+          .insert({
+            team_id: cTeamId, inviter_id: C2.id, invitee_id: C3.id, target_days: 3,
+            starts_on: startsOn, ends_on: addDaysToKey(startsOn, 6),
+            expires_at: new Date(Date.now() + 3 * 86_400_000).toISOString(), status: 'pending',
+            ...over,
+          })
+          .select('*')
+          .single();
+        if (error) throw error;
+        return data!;
+      };
+      /** A completed workout at an exact instant (service role, no scoring/chat side effects of the user flow). */
+      const workoutAt = async (who: Who, instant: string, teamId: string = cTeamId) => {
+        const finished = new Date(instant);
+        const { error } = await admin.from('workouts').insert({
+          user_id: who.id, team_id: teamId, activity_type: 'krafttraining', status: 'abgeschlossen', title: 'Duel Test',
+          started_at: new Date(finished.getTime() - 20 * 60_000).toISOString(), finished_at: finished.toISOString(), duration_seconds: 1200,
+        });
+        expect(error).toBeNull();
+      };
+      const clearWorkouts = async () => {
+        await admin.from('workouts').delete().in('user_id', [C2.id, C3.id]);
+      };
+
+      beforeEach(async () => {
+        await resetDuels();
+        await clearWorkouts();
+      });
+
+      it('144. propose_team_duel creates a pending invitation with a seven-day window and a bounded expiry', async () => {
+        const startsOn = dayKeyPlus(10);
+        const res = await propose(C1, C2.id, 3, startsOn);
+        expect(res.error).toBeNull();
+        expect(res.data![0].is_new).toBe(true);
+        const duel = (await admin.from('team_duels').select('*').eq('id', res.data![0].duel_id).single()).data!;
+        expect(duel).toMatchObject({
+          team_id: cTeamId, inviter_id: C1.id, invitee_id: C2.id, target_days: 3, status: 'pending',
+          starts_on: startsOn, ends_on: addDaysToKey(startsOn, 6), cancelled_by: null, responded_at: null,
+        });
+        // A far-off start gives three days to answer.
+        const hours = (new Date(duel.expires_at).getTime() - new Date(duel.created_at).getTime()) / 3_600_000;
+        expect(hours).toBeGreaterThan(71.9);
+        expect(hours).toBeLessThan(72.1);
+
+        // Starting tomorrow, the invitation dies at the start of that day (Berlin midnight), never after.
+        await resetDuels();
+        const tomorrow = dayKeyPlus(1);
+        const soon = await propose(C1, C2.id, 3, tomorrow);
+        const soonRow = (await admin.from('team_duels').select('expires_at').eq('id', soon.data![0].duel_id).single()).data!;
+        expect(new Date(soonRow.expires_at).getTime()).toBe(localDateTimeToUtc(`${tomorrow}T00:00`)!.getTime());
+      });
+
+      it('145. propose_team_duel rejects a bad target or start, a self-invite and anyone outside the team — without leaking who is where', async () => {
+        await expectError(propose(C1, C2.id, 3, berlinToday()), 'invalid_start_date'); // today: not in the future
+        await expectError(propose(C1, C2.id, 3, dayKeyPlus(-1)), 'invalid_start_date'); // retroactive
+        await expectError(propose(C1, C2.id, 3, dayKeyPlus(15)), 'invalid_start_date'); // too far out
+        await expectError(propose(C1, C2.id, 3, null), 'invalid_start_date');
+        await expectError(propose(C1, C2.id, 0), 'invalid_target_days');
+        await expectError(propose(C1, C2.id, 8), 'invalid_target_days');
+        await expectError(propose(C1, C2.id, null), 'invalid_target_days');
+        await expectError(propose(C1, C1.id), 'invalid_invitee');
+        await expectError(propose(C1, outsider.id), 'invitee_unavailable'); // exists, but in another team
+        await expectError(propose(C1, GHOST_ID), 'invitee_unavailable'); // does not exist: the very same answer
+        await expectError(propose(outsider, C1.id), 'not_a_team_member'); // not a member of this team at all
+        await expectError(propose(C1, C2.id, 3, dayKeyPlus(5), outsiderTeamId), 'not_a_team_member'); // foreign team id
+        expect(await duelRows()).toEqual([]);
+
+        // The boundaries themselves are valid.
+        expect((await propose(C1, C2.id, 1, dayKeyPlus(1))).error).toBeNull();
+        await resetDuels();
+        expect((await propose(C1, C2.id, 7, dayKeyPlus(14))).error).toBeNull();
+      });
+
+      it('146. an identical retry returns the same invitation (is_new=false); concurrent double-submits create exactly one', async () => {
+        const startsOn = dayKeyPlus(6);
+        const first = await propose(C1, C2.id, 3, startsOn);
+        const second = await propose(C1, C2.id, 3, startsOn);
+        expect(second.error).toBeNull();
+        expect(second.data![0].duel_id).toBe(first.data![0].duel_id);
+        expect(second.data![0].is_new).toBe(false);
+        expect(await duelRows()).toHaveLength(1);
+
+        await resetDuels();
+        const results = await Promise.all(Array.from({ length: 5 }, () => propose(C1, C2.id, 3, startsOn)));
+        expect(results.every((r) => r.error === null)).toBe(true);
+        expect(new Set(results.map((r) => r.data![0].duel_id)).size).toBe(1);
+        expect(results.filter((r) => r.data![0].is_new)).toHaveLength(1);
+        expect(await duelRows()).toHaveLength(1);
+      });
+
+      it('147. one open duel per person; a busy invitee is indistinguishable from an unavailable one', async () => {
+        await propose(C1, C2.id);
+        await expectError(propose(C1, C3.id), 'already_in_duel'); // the inviter is already in one
+        await expectError(propose(C2, C3.id), 'already_in_duel'); // so is the invitee, from their side
+        await expectError(propose(C3, C2.id), 'invitee_unavailable'); // someone else invites the busy invitee
+        await expectError(propose(C3, C1.id), 'invitee_unavailable'); // ...or the busy inviter
+        const busy = await propose(C3, C2.id);
+        const absent = await propose(C3, outsider.id);
+        expect(busy.error!.message).toBe(absent.error!.message);
+        expect(await duelRows()).toHaveLength(1);
+      });
+
+      it('148. concurrent invitations cannot both win: A→B vs C→B, and A→B vs B→A, each leave exactly one duel', async () => {
+        // A race can pass by luck once, so repeat it: with the per-person
+        // advisory locks the outcome is exactly one winner every time.
+        for (let round = 0; round < 6; round++) {
+          await resetDuels();
+          const [x, y] = await Promise.all([propose(C1, C2.id), propose(C3, C2.id)]);
+          expect([x, y].filter((r) => r.error === null), `A→B vs C→B, round ${round}`).toHaveLength(1);
+          expect([x, y].find((r) => r.error)!.error!.message).toContain('invitee_unavailable');
+          expect(await duelRows()).toHaveLength(1);
+
+          await resetDuels();
+          const [p, q] = await Promise.all([propose(C1, C2.id), propose(C2, C1.id)]);
+          expect([p, q].filter((r) => r.error === null), `A→B vs B→A, round ${round}`).toHaveLength(1);
+          expect(await duelRows()).toHaveLength(1);
+        }
+      });
+
+      it('149. an expired invitation stops blocking both people and is marked expired', async () => {
+        const stale = await insertDuel({ inviter_id: C1.id, invitee_id: C2.id, expires_at: minutesAgo(1) });
+        expect((await propose(C1, C3.id)).error).toBeNull(); // the stale inviter is free
+        expect(await statusOf(stale.id)).toBe('expired');
+
+        await resetDuels();
+        await insertDuel({ inviter_id: C1.id, invitee_id: C2.id, expires_at: minutesAgo(1) });
+        expect((await propose(C3, C2.id)).error).toBeNull(); // and so is the stale invitee
+      });
+
+      it('150. only the invitee can accept: everyone else gets the same "not found" and nothing changes; retries are harmless', async () => {
+        const id = (await propose(C1, C2.id)).data![0].duel_id as string;
+        const ghost = await respond(C2, GHOST_ID, true);
+        for (const who of [C1, C3, outsider]) {
+          const r = await respond(who, id, true);
+          expect(r.error?.message).toContain('duel_not_found');
+          expect(r.error?.message).toBe(ghost.error?.message); // same answer as for a duel that does not exist
+        }
+        expect(await statusOf(id)).toBe('pending');
+
+        expect((await respond(C2, id, true)).data![0]).toEqual({ duel_status: 'accepted', changed: true });
+        const row = (await admin.from('team_duels').select('*').eq('id', id).single()).data!;
+        expect(row.status).toBe('accepted');
+        expect(row.responded_at).not.toBeNull();
+        // Retrying — or "declining" afterwards — is a quiet no-op, never an error.
+        expect((await respond(C2, id, true)).data![0]).toEqual({ duel_status: 'accepted', changed: false });
+        expect((await respond(C2, id, false)).data![0]).toEqual({ duel_status: 'accepted', changed: false });
+      });
+
+      it('151. declining is final for that invitation, repeatable, and the inviter may invite again', async () => {
+        const id = (await propose(C1, C2.id)).data![0].duel_id as string;
+        expect((await respond(C2, id, false)).data![0]).toEqual({ duel_status: 'declined', changed: true });
+        expect((await respond(C2, id, false)).data![0]).toEqual({ duel_status: 'declined', changed: false });
+        expect((await respond(C2, id, true)).data![0]).toEqual({ duel_status: 'declined', changed: false }); // no resurrection
+        expect(await statusOf(id)).toBe('declined');
+        expect((await propose(C1, C2.id)).error).toBeNull();
+      });
+
+      it('152. accepting after the invitation expired — or after its start date arrived — returns "expired" and persists it (no retroactive start)', async () => {
+        const stale = await insertDuel({ inviter_id: C1.id, invitee_id: C2.id, expires_at: minutesAgo(5) });
+        const r = await respond(C2, stale.id, true);
+        expect(r.error).toBeNull();
+        expect(r.data![0]).toEqual({ duel_status: 'expired', changed: true });
+        expect(await statusOf(stale.id)).toBe('expired');
+        expect((await respond(C2, stale.id, true)).data![0]).toEqual({ duel_status: 'expired', changed: false });
+
+        await resetDuels();
+        const started = await insertDuel({ inviter_id: C1.id, invitee_id: C2.id, starts_on: berlinToday() });
+        expect((await respond(C2, started.id, true)).data![0].duel_status).toBe('expired');
+        expect(await statusOf(started.id)).toBe('expired');
+      });
+
+      it('153. a duel\'s terms are frozen and its status only moves forward — even for the service role', async () => {
+        const d = await insertDuel({ inviter_id: C1.id, invitee_id: C2.id, status: 'accepted' });
+        const frozen: Record<string, unknown>[] = [
+          { target_days: 7 },
+          { starts_on: dayKeyPlus(9), ends_on: dayKeyPlus(15) },
+          { invitee_id: C3.id },
+          { inviter_id: C3.id },
+          { expires_at: new Date(Date.now() + 30 * 86_400_000).toISOString() },
+          { team_id: outsiderTeamId },
+        ];
+        for (const patch of frozen) {
+          const r = await admin.from('team_duels').update(patch).eq('id', d.id);
+          expect(r.error?.message, JSON.stringify(patch)).toContain('duel_terms_are_frozen');
+        }
+
+        const illegal: [Record<string, unknown>, string][] = [
+          [{ status: 'declined' }, 'accepted'],
+          [{ status: 'expired' }, 'accepted'],
+          [{ status: 'cancelled', cancelled_by: C1.id }, 'pending'],
+          [{ status: 'accepted' }, 'pending'],
+          [{ status: 'accepted' }, 'expired'],
+          [{ status: 'accepted' }, 'declined'],
+        ];
+        for (const [fixture, to] of illegal) {
+          const row = await insertDuel({ inviter_id: C1.id, invitee_id: C2.id, ...fixture });
+          const patch: Record<string, unknown> = { status: to };
+          if (to !== 'cancelled') patch.cancelled_by = null;
+          const r = await admin.from('team_duels').update(patch).eq('id', row.id);
+          expect(r.error?.message, `${fixture.status as string} -> ${to}`).toContain('invalid_duel_transition');
+        }
+        // Forward moves are fine.
+        const pending = await insertDuel({ inviter_id: C1.id, invitee_id: C2.id });
+        expect((await admin.from('team_duels').update({ status: 'accepted' }).eq('id', pending.id)).error).toBeNull();
+      });
+
+      it('154. clients cannot write team_duels directly (there is no insert, update or delete policy)', async () => {
+        const startsOn = dayKeyPlus(5);
+        const ins = await C1.client.from('team_duels').insert({
+          team_id: cTeamId, inviter_id: C1.id, invitee_id: C2.id, target_days: 3, starts_on: startsOn,
+          ends_on: addDaysToKey(startsOn, 6), expires_at: new Date(Date.now() + 86_400_000).toISOString(),
+        });
+        expect(ins.error).not.toBeNull();
+
+        const d = await insertDuel({ inviter_id: C1.id, invitee_id: C2.id });
+        const selfAccept = await C2.client.from('team_duels').update({ status: 'accepted' }).eq('id', d.id).select('id');
+        expect(selfAccept.data ?? []).toEqual([]);
+        const del = await C1.client.from('team_duels').delete().eq('id', d.id).select('id');
+        expect(del.data ?? []).toEqual([]);
+        expect(await statusOf(d.id)).toBe('pending');
+      });
+
+      it('155. only the two participants can read a duel — not the team admin, another member, an outsider or an anonymous caller', async () => {
+        const d = await insertDuel({ inviter_id: C2.id, invitee_id: C3.id, status: 'accepted', starts_on: dayKeyPlus(-1) });
+        for (const who of [C2, C3]) {
+          expect((await who.client.from('team_duels').select('id').eq('id', d.id)).data).toHaveLength(1);
+        }
+        for (const who of [C1, outsider, userA, userB]) {
+          expect((await who.client.from('team_duels').select('id').eq('id', d.id)).data ?? []).toEqual([]);
+        }
+        const anon = createClient(SUPABASE_URL, ANON_KEY);
+        expect((await anon.from('team_duels').select('id').eq('id', d.id)).data ?? []).toEqual([]);
+
+        // Progress for a non-participant is empty — no error, no hint the duel exists.
+        const asAdmin = await progress(C1, d.id);
+        expect(asAdmin.error).toBeNull();
+        expect(asAdmin.data ?? []).toEqual([]);
+        expect(countsOf(await progress(C2, d.id))).toEqual({ [C2.id]: 0, [C3.id]: 0 });
+      });
+
+      it('156. progress counts distinct Berlin dates with a completed workout per participant, ignoring other teams, unfinished workouts and anything outside the window', async () => {
+        const d = await insertDuel({ inviter_id: C2.id, invitee_id: C3.id, status: 'accepted', target_days: 3, starts_on: '2026-01-05' }); // Mon 5th – Sun 11th
+        await workoutAt(C2, '2026-01-06T08:00:00+01:00'); // three workouts the same date = one day
+        await workoutAt(C2, '2026-01-06T12:00:00+01:00');
+        await workoutAt(C2, '2026-01-06T19:00:00+01:00');
+        await workoutAt(C2, '2026-01-08T18:00:00+01:00'); // a second date
+        await workoutAt(C2, '2026-01-04T23:30:00+01:00'); // the evening before the window
+        await workoutAt(C2, '2026-01-12T00:30:00+01:00'); // just after it
+        await workoutAt(C2, '2026-01-09T10:00:00+01:00', outsiderTeamId); // another team's workout
+        await admin.from('workouts').insert({ user_id: C2.id, team_id: cTeamId, activity_type: 'krafttraining', status: 'laeuft', started_at: '2026-01-10T10:00:00+01:00' }); // never finished
+        const mine = countsOf(await progress(C2, d.id));
+        expect(mine).toEqual({ [C2.id]: 2, [C3.id]: 0 });
+        expect(countsOf(await progress(C3, d.id))).toEqual(mine); // both see the same numbers
+      });
+
+      it('157. progress never exceeds the target', async () => {
+        const d = await insertDuel({ inviter_id: C2.id, invitee_id: C3.id, status: 'accepted', target_days: 2, starts_on: '2026-02-02' });
+        for (const day of ['02', '03', '04', '05']) await workoutAt(C2, `2026-02-${day}T18:00:00+01:00`);
+        expect(countsOf(await progress(C3, d.id))).toEqual({ [C2.id]: 2, [C3.id]: 0 });
+      });
+
+      it('158. the window runs Berlin midnight to Berlin midnight, including the 23-hour and 25-hour daylight-saving days', async () => {
+        const counted = async (startsOn: string) => {
+          const d = await insertDuel({ inviter_id: C2.id, invitee_id: C3.id, status: 'accepted', target_days: 7, starts_on: startsOn });
+          const n = countsOf(await progress(C2, d.id))[C2.id];
+          await admin.from('team_duels').delete().eq('id', d.id);
+          return n;
+        };
+        // Spring: Mon 03-23 … Sun 03-29 (clocks jump 02:00→03:00 on the 29th, a 23-hour day).
+        await workoutAt(C2, '2026-03-22T23:50:00+01:00'); // Sunday before: out
+        await workoutAt(C2, '2026-03-28T23:50:00+01:00'); // Saturday: in (day 1)
+        await workoutAt(C2, '2026-03-29T00:10:00+01:00'); // first minutes of the short day: in (day 2)
+        await workoutAt(C2, '2026-03-29T23:50:00+02:00'); // same Berlin date: still day 2
+        await workoutAt(C2, '2026-03-30T00:10:00+02:00'); // Monday after: out
+        expect(await counted('2026-03-23')).toBe(2);
+        // A window that STARTS on the transition day: 03-29 … 04-04.
+        expect(await counted('2026-03-29')).toBe(2); // 03-29 (both workouts, one date) and 03-30
+        await clearWorkouts();
+
+        // Autumn: Mon 10-19 … Sun 10-25 (clocks go back 03:00→02:00 on the 25th, a 25-hour day).
+        await workoutAt(C2, '2026-10-18T23:30:00+02:00'); // out
+        await workoutAt(C2, '2026-10-25T00:30:00+02:00'); // first hour of the long day: in
+        await workoutAt(C2, '2026-10-25T23:30:00+01:00'); // last hour of the long day: same date
+        await workoutAt(C2, '2026-10-26T00:30:00+01:00'); // out
+        expect(await counted('2026-10-19')).toBe(1);
+        // Starting ON the 25th: 10-25 … 10-31.
+        expect(await counted('2026-10-25')).toBe(2); // the 25th and the 26th
+      });
+
+      it('159. an opted-out member\'s days still count in a duel they accepted, while the team-wide mission count keeps excluding them', async () => {
+        const d = await insertDuel({ inviter_id: C2.id, invitee_id: C3.id, status: 'accepted', target_days: 3, starts_on: '2026-04-06' });
+        await workoutAt(C2, '2026-04-07T18:00:00+02:00');
+        const range = { p_team_id: cTeamId, p_start_date: '2026-04-06', p_end_date: '2026-04-12' };
+        expect(Number((await C1.client.rpc('get_team_mission_training_days', range)).data)).toBe(1);
+
+        await admin.from('privacy_settings').upsert({ user_id: C2.id, activity_feed_opt_in: false });
+        expect(countsOf(await progress(C2, d.id))[C2.id]).toBe(1); // explicit per-duel consent
+        expect(Number((await C1.client.rpc('get_team_mission_training_days', range)).data)).toBe(0); // team feature still honours the opt-out
+        await admin.from('privacy_settings').upsert({ user_id: C2.id, activity_feed_opt_in: true });
+      });
+
+      it('160. either participant can end a duel without a reason; a third member cannot; ending twice or after it finished changes nothing', async () => {
+        // A pending invitation withdrawn by the inviter.
+        const id1 = (await propose(C1, C2.id)).data![0].duel_id as string;
+        await expectError(cancel(C3, id1), 'duel_not_found');
+        expect((await cancel(C1, id1)).data![0]).toEqual({ duel_status: 'cancelled', changed: true });
+        const row1 = (await admin.from('team_duels').select('cancelled_by').eq('id', id1).single()).data!;
+        expect(row1.cancelled_by).toBe(C1.id);
+        expect((await cancel(C1, id1)).data![0]).toEqual({ duel_status: 'cancelled', changed: false });
+
+        // The invitee "cancelling" a pending invitation is simply a decline.
+        const id2 = (await propose(C1, C2.id)).data![0].duel_id as string;
+        expect((await cancel(C2, id2)).data![0]).toEqual({ duel_status: 'declined', changed: true });
+
+        // An accepted, running duel can be ended by either side — and its progress disappears.
+        const running = await insertDuel({ inviter_id: C1.id, invitee_id: C2.id, status: 'accepted', starts_on: dayKeyPlus(-2) });
+        expect((await cancel(C2, running.id)).data![0]).toEqual({ duel_status: 'cancelled', changed: true });
+        expect((await admin.from('team_duels').select('cancelled_by').eq('id', running.id).single()).data!.cancelled_by).toBe(C2.id);
+        expect((await progress(C1, running.id)).data ?? []).toEqual([]);
+
+        // A duel that has already finished can no longer be rewritten.
+        const finished = await insertDuel({ inviter_id: C1.id, invitee_id: C2.id, status: 'accepted', starts_on: dayKeyPlus(-10) });
+        expect((await cancel(C1, finished.id)).data![0]).toEqual({ duel_status: 'accepted', changed: false });
+        expect(await statusOf(finished.id)).toBe('accepted');
+      });
+
+      it('161. a participant leaving the team hides the duel and unblocks the other person; re-joining restores it', async () => {
+        const d = await insertDuel({ inviter_id: C2.id, invitee_id: C3.id, status: 'accepted', starts_on: dayKeyPlus(-1) });
+        expect((await C2.client.from('team_duels').select('id').eq('id', d.id)).data).toHaveLength(1);
+
+        await admin.from('team_members').delete().eq('team_id', cTeamId).eq('user_id', C3.id);
+        expect((await C2.client.from('team_duels').select('id').eq('id', d.id)).data ?? []).toEqual([]);
+        expect((await progress(C2, d.id)).data ?? []).toEqual([]);
+        await expectError(respond(C2, d.id, true), 'duel_not_found');
+        await expectError(cancel(C2, d.id), 'duel_not_found');
+        expect((await propose(C2, C1.id)).error).toBeNull(); // no longer blocked by the dangling duel
+
+        await admin.from('team_duels').delete().eq('team_id', cTeamId).neq('id', d.id);
+        await admin.from('team_members').insert({ team_id: cTeamId, user_id: C3.id, role: 'member' });
+        expect((await C2.client.from('team_duels').select('id').eq('id', d.id)).data).toHaveLength(1);
+        expect(countsOf(await progress(C2, d.id))).toEqual({ [C2.id]: 0, [C3.id]: 0 });
+      });
+
+      it('162. proposing, accepting, declining and cancelling write no points, chat messages, notifications, feed items or audit rows', async () => {
+        const ids = [C1.id, C2.id, C3.id];
+        const snapshot = async () => ({
+          score: (await admin.from('fitness_score_events').select('id', { count: 'exact', head: true }).in('user_id', ids)).count,
+          messages: (await admin.from('messages').select('id', { count: 'exact', head: true }).eq('team_id', cTeamId)).count,
+          notifications: (await admin.from('notifications').select('id', { count: 'exact', head: true }).in('user_id', ids)).count,
+          feed: (await admin.from('activity_feed').select('id', { count: 'exact', head: true }).eq('team_id', cTeamId)).count,
+          audit: (await admin.from('audit_events').select('id', { count: 'exact', head: true }).eq('team_id', cTeamId)).count,
+        });
+        const before = await snapshot();
+        const a = (await propose(C1, C2.id)).data![0].duel_id as string;
+        await respond(C2, a, true);
+        await cancel(C1, a);
+        const b = (await propose(C1, C3.id)).data![0].duel_id as string;
+        await respond(C3, b, false);
+        expect(await snapshot()).toEqual(before);
+      });
+
+      it('163. the duel functions are not callable anonymously, and the internal busy-check is not callable by clients at all', async () => {
+        const anon = createClient(SUPABASE_URL, ANON_KEY);
+        const calls: [string, Record<string, unknown>][] = [
+          ['propose_team_duel', { p_team_id: cTeamId, p_invitee_id: C2.id, p_target_days: 3, p_starts_on: dayKeyPlus(5) }],
+          ['respond_team_duel', { p_duel_id: GHOST_ID, p_accept: true }],
+          ['cancel_team_duel', { p_duel_id: GHOST_ID }],
+          ['get_duel_progress', { p_duel_id: GHOST_ID }],
+          ['has_open_duel', { p_team_id: cTeamId, p_user_id: C2.id, p_today: berlinToday() }],
+        ];
+        for (const [fn, args] of calls) expect((await anon.rpc(fn, args)).error, fn).not.toBeNull();
+        expect((await C1.client.rpc('has_open_duel', { p_team_id: cTeamId, p_user_id: C2.id, p_today: berlinToday() })).error).not.toBeNull();
+        expect(await duelRows()).toEqual([]);
+      });
+
+      it('164. deleting an account that is in duels succeeds and removes those duels for the other side too', async () => {
+        const X = await createTestUser('c-leaver');
+        await admin.from('team_members').insert({ team_id: cTeamId, user_id: X.id, role: 'member' });
+        const withdrawn = (await propose(X, C2.id)).data![0].duel_id as string;
+        await cancel(X, withdrawn); // leaves a row whose cancelled_by is X
+        const open = (await propose(X, C3.id)).data![0].duel_id as string;
+        expect(await duelRows()).toHaveLength(2);
+
+        const del = await admin.auth.admin.deleteUser(X.id);
+        expect(del.error).toBeNull();
+        expect((await admin.from('team_duels').select('id').in('id', [withdrawn, open])).data).toEqual([]);
+        expect((await propose(C3, C2.id)).error).toBeNull(); // C3 is no longer held by the departed account's invitation
+      });
+
+      it('193. a person who ends up in two open duels (a partner was removed, then rejoined) can still see and end each of them', async () => {
+        const older = await insertDuel({ inviter_id: C2.id, invitee_id: C3.id, status: 'accepted', starts_on: dayKeyPlus(-1) });
+        await admin.from('team_members').delete().eq('team_id', cTeamId).eq('user_id', C3.id);
+        // While C3 is away the dangling duel does not block C2 — so C2 can enter a new one with C1.
+        const newer = (await propose(C2, C1.id)).data![0].duel_id as string;
+        expect((await respond(C1, newer, true)).data![0].duel_status).toBe('accepted');
+
+        await admin.from('team_members').insert({ team_id: cTeamId, user_id: C3.id, role: 'member' });
+        const visible = ((await C2.client.from('team_duels').select('id')).data ?? []).map((r) => r.id);
+        expect(visible).toEqual(expect.arrayContaining([older.id, newer])); // neither is hidden from the person in both
+        expect((await cancel(C2, older.id)).data![0]).toEqual({ duel_status: 'cancelled', changed: true });
+        expect((await cancel(C2, newer)).data![0]).toEqual({ duel_status: 'cancelled', changed: true });
+      });
+    });
+
+    describe('training invitations ("Wer ist dabei?")', () => {
+      type Who = typeof userB;
+      const GHOST_ID = '00000000-0000-4000-8000-000000000000';
+      const inHours = (h: number) => new Date(Date.now() + h * 3_600_000).toISOString();
+      const inDays = (d: number) => inHours(d * 24);
+
+      const publishArgs = (over: Record<string, unknown> = {}) => ({
+        p_invite_id: crypto.randomUUID(), p_team_id: cTeamId, p_title: 'Beine & Rücken', p_starts_at: inHours(30),
+        p_activity_type: 'krafttraining', p_place: 'Eingang Studio', p_note: 'Bring ein Handtuch', p_plan_share_id: null, ...over,
+      });
+      const publish = (who: Who, over: Record<string, unknown> = {}) => who.client.rpc('publish_training_invite', publishArgs(over));
+      const updateArgs = (id: string, over: Record<string, unknown> = {}) => ({
+        p_invite_id: id, p_title: 'Beine & Rücken', p_starts_at: inHours(30), p_activity_type: 'krafttraining',
+        p_place: 'Eingang Studio', p_note: 'Bring ein Handtuch', p_plan_share_id: null, ...over,
+      });
+      const rsvp = (who: Who, inviteId: string, status: string | null) => who.client.rpc('set_training_invite_rsvp', { p_invite_id: inviteId, p_status: status });
+      const cancelInvite = (who: Who, inviteId: string) => who.client.rpc('cancel_training_invite', { p_invite_id: inviteId });
+      const expectError = async (p: PromiseLike<{ error: { message: string } | null }>, text: string) => {
+        const r = await p;
+        expect(r.error?.message, text).toContain(text);
+      };
+
+      /** An invitation created by `who`, returning ids; fixed start unless overridden. */
+      const makeInvite = async (who: Who, over: Record<string, unknown> = {}) => {
+        const args = publishArgs(over);
+        const res = await who.client.rpc('publish_training_invite', args);
+        expect(res.error).toBeNull();
+        return { inviteId: args.p_invite_id as string, messageId: res.data![0].out_message_id as string, startsAt: args.p_starts_at as string };
+      };
+      const inviteRow = async (id: string) => (await admin.from('training_invites').select('*').eq('id', id).single()).data!;
+      const rsvpRows = async (id: string) => (await admin.from('training_invite_rsvps').select('user_id, status').eq('invite_id', id)).data ?? [];
+      const messageCount = async () => (await admin.from('messages').select('id', { count: 'exact', head: true }).eq('team_id', cTeamId)).count;
+      const makeShare = async (teamId: string, author: Who, over: Record<string, unknown> = {}) => {
+        const { data: msg } = await admin.from('messages').insert({ team_id: teamId, user_id: author.id, content: 'geteilt', message_type: 'text' }).select('id').single();
+        const { data: share, error } = await admin
+          .from('plan_shares')
+          .insert({ message_id: msg!.id, team_id: teamId, author_id: author.id, source_type: 'template', title: 'Push Day', ...over })
+          .select('id')
+          .single();
+        if (error) throw error;
+        return share!.id as string;
+      };
+
+      beforeEach(async () => {
+        await admin.from('messages').delete().eq('team_id', cTeamId).not('metadata->>training_invite_id', 'is', null);
+        await admin.from('plan_shares').delete().eq('team_id', cTeamId);
+        // Plan-share fixture messages are plain text rows; leave chat history alone otherwise.
+      });
+
+      it('165. publish creates ONE chat message (metadata set from the first INSERT), the invitation and the organizer\'s own "Dabei"', async () => {
+        const before = await messageCount();
+        const startsAt = '2026-12-24T17:00:00.000Z';
+        void startsAt;
+        const when = inHours(30);
+        const args = publishArgs({ p_starts_at: when, p_title: '  Beine & Rücken  ', p_place: '  Eingang Studio ', p_note: '' });
+        const res = await C1.client.rpc('publish_training_invite', args);
+        expect(res.error).toBeNull();
+        expect(res.data![0].is_new).toBe(true);
+
+        const { data: msg } = await admin.from('messages').select('*').eq('id', res.data![0].out_message_id).single();
+        expect(msg).toMatchObject({ team_id: cTeamId, user_id: C1.id, message_type: 'text', deleted_at: null, edited_at: null });
+        expect(msg!.metadata).toEqual({ training_invite_id: args.p_invite_id }); // present immediately — no later UPDATE
+        const berlinDay = new Date(when).toLocaleDateString('de-DE', { timeZone: 'Europe/Berlin', day: '2-digit', month: '2-digit', year: 'numeric' });
+        const berlinTime = new Date(when).toLocaleTimeString('de-DE', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit', hour12: false });
+        expect(msg!.content).toBe(`Gemeinsames Training: Beine & Rücken · ${berlinDay}, ${berlinTime} Uhr`);
+
+        const inv = await inviteRow(args.p_invite_id);
+        expect(inv).toMatchObject({
+          message_id: msg!.id, team_id: cTeamId, organizer_id: C1.id, title: 'Beine & Rücken', activity_type: 'krafttraining',
+          place: 'Eingang Studio', note: null, plan_share_id: null, rsvp_version: 0, cancelled_at: null, edited_at: null,
+        });
+        expect(await rsvpRows(args.p_invite_id)).toEqual([{ user_id: C1.id, status: 'going' }]);
+        expect(await messageCount()).toBe((before ?? 0) + 1);
+      });
+
+      it('166. publish validates and normalizes every field, with a precise error each', async () => {
+        await expectError(publish(C1, { p_title: '' }), 'invalid_title');
+        await expectError(publish(C1, { p_title: '   ' }), 'invalid_title');
+        await expectError(publish(C1, { p_title: 'x'.repeat(81) }), 'invalid_title');
+        await expectError(publish(C1, { p_place: 'x'.repeat(81) }), 'invalid_place');
+        await expectError(publish(C1, { p_note: 'x'.repeat(201) }), 'invalid_note');
+        await expectError(publish(C1, { p_activity_type: 'yoga' }), 'invalid_activity_type');
+        await expectError(publish(C1, { p_starts_at: inHours(-1) }), 'invalid_start_time'); // in the past
+        await expectError(publish(C1, { p_starts_at: null }), 'invalid_start_time');
+        await expectError(publish(C1, { p_starts_at: inDays(91) }), 'invalid_start_time'); // too far ahead
+        await expectError(publish(C1, { p_team_id: outsiderTeamId }), 'not_a_team_member'); // foreign team
+        await expectError(publish(outsider), 'not_a_team_member'); // not a member of this team
+        await expectError(publish(C1, { p_invite_id: null }), 'invalid_request');
+        expect(await messageCount()).toBe(await messageCount()); // nothing half-created:
+        expect((await admin.from('training_invites').select('id').eq('team_id', cTeamId)).data).toEqual([]);
+
+        // Boundary values are fine, and empty optional text is stored as NULL.
+        const ok = await publish(C1, { p_title: 'x'.repeat(80), p_place: 'y'.repeat(80), p_note: 'z'.repeat(200), p_starts_at: inDays(89), p_activity_type: null });
+        expect(ok.error).toBeNull();
+        const blank = await publish(C1, { p_place: '  ', p_note: '', p_activity_type: null });
+        const row = await inviteRow(blank.data![0].out_invite_id);
+        expect(row.place).toBeNull();
+        expect(row.note).toBeNull();
+        expect(row.activity_type).toBeNull();
+      });
+
+      it('167. publishing is idempotent on the invitation id — retries and concurrent double taps make one card; another user cannot reuse the id', async () => {
+        const args = publishArgs();
+        const first = await C1.client.rpc('publish_training_invite', args);
+        const second = await C1.client.rpc('publish_training_invite', args);
+        expect(second.error).toBeNull();
+        expect(second.data![0]).toMatchObject({ out_message_id: first.data![0].out_message_id, out_invite_id: args.p_invite_id, is_new: false });
+        await expectError(C2.client.rpc('publish_training_invite', args), 'invalid_request'); // someone else's id
+        expect((await admin.from('training_invites').select('id').eq('id', args.p_invite_id)).data).toHaveLength(1);
+
+        const burst = publishArgs();
+        const before = await messageCount();
+        const results = await Promise.all(Array.from({ length: 5 }, () => C2.client.rpc('publish_training_invite', burst)));
+        expect(results.every((r) => r.error === null)).toBe(true);
+        expect(results.filter((r) => r.data![0].is_new)).toHaveLength(1);
+        expect(new Set(results.map((r) => r.data![0].out_message_id)).size).toBe(1);
+        expect(await messageCount()).toBe((before ?? 0) + 1);
+      });
+
+      it('168. members can read invitations and answers; outsiders cannot; clients cannot write any of it', async () => {
+        const { inviteId } = await makeInvite(C1);
+        await rsvp(C2, inviteId, 'maybe');
+        for (const who of [C1, C2, C3]) {
+          expect((await who.client.from('training_invites').select('id').eq('id', inviteId)).data).toHaveLength(1);
+          expect((await who.client.from('training_invite_rsvps').select('user_id').eq('invite_id', inviteId)).data).toHaveLength(2);
+        }
+        for (const who of [outsider, userA]) {
+          expect((await who.client.from('training_invites').select('id').eq('id', inviteId)).data ?? []).toEqual([]);
+          expect((await who.client.from('training_invite_rsvps').select('user_id').eq('invite_id', inviteId)).data ?? []).toEqual([]);
+        }
+        const anon = createClient(SUPABASE_URL, ANON_KEY);
+        expect((await anon.from('training_invites').select('id').eq('id', inviteId)).data ?? []).toEqual([]);
+
+        // No client write path of any kind — not even for the organizer or the team admin.
+        const ins = await C3.client.from('training_invites').insert({ id: crypto.randomUUID(), message_id: crypto.randomUUID(), team_id: cTeamId, organizer_id: C3.id, title: 'x', starts_at: inHours(5) });
+        expect(ins.error).not.toBeNull();
+        const forged = await C3.client.from('training_invite_rsvps').insert({ invite_id: inviteId, team_id: cTeamId, user_id: C2.id, status: 'going' });
+        expect(forged.error).not.toBeNull();
+        const selfInsert = await C3.client.from('training_invite_rsvps').insert({ invite_id: inviteId, team_id: cTeamId, user_id: C3.id, status: 'going' });
+        expect(selfInsert.error).not.toBeNull();
+        for (const who of [C1, C2]) {
+          const upd = await who.client.from('training_invites').update({ title: 'gehackt', starts_at: inHours(2) }).eq('id', inviteId).select('id');
+          expect(upd.data ?? []).toEqual([]);
+          const del = await who.client.from('training_invites').delete().eq('id', inviteId).select('id');
+          expect(del.data ?? []).toEqual([]);
+        }
+        const delRsvp = await C1.client.from('training_invite_rsvps').delete().eq('invite_id', inviteId).eq('user_id', C2.id).select('user_id');
+        expect(delRsvp.data ?? []).toEqual([]);
+        expect((await inviteRow(inviteId)).title).toBe('Beine & Rücken');
+        expect(await rsvpRows(inviteId)).toHaveLength(2);
+      });
+
+      it('169. answering: going / maybe / withdraw are changeable and idempotent, and rsvp_version moves only on a real change', async () => {
+        const { inviteId } = await makeInvite(C1);
+        const version = async () => (await inviteRow(inviteId)).rsvp_version as number;
+        const v0 = await version();
+
+        expect((await rsvp(C2, inviteId, 'going')).data).toBe('going');
+        expect(await version()).toBe(v0 + 1);
+        expect((await rsvp(C2, inviteId, 'going')).data).toBe('going'); // retry: nothing changes
+        expect(await version()).toBe(v0 + 1);
+        expect((await rsvp(C2, inviteId, 'maybe')).data).toBe('maybe');
+        expect(await version()).toBe(v0 + 2);
+        expect((await rsvp(C2, inviteId, null)).data).toBeNull(); // withdraw
+        expect(await version()).toBe(v0 + 3);
+        expect((await rsvp(C2, inviteId, null)).error).toBeNull(); // withdrawing again is a quiet no-op
+        expect(await version()).toBe(v0 + 3);
+        await expectError(rsvp(C2, inviteId, 'definitely'), 'invalid_status');
+        expect(await rsvpRows(inviteId)).toEqual([{ user_id: C1.id, status: 'going' }]);
+
+        // One row per person: changing never duplicates.
+        await rsvp(C3, inviteId, 'maybe');
+        await rsvp(C3, inviteId, 'going');
+        expect((await rsvpRows(inviteId)).filter((r) => r.user_id === C3.id)).toEqual([{ user_id: C3.id, status: 'going' }]);
+      });
+
+      it('170. concurrent identical answers leave one row and bump the version exactly once', async () => {
+        const { inviteId } = await makeInvite(C1);
+        const v0 = (await inviteRow(inviteId)).rsvp_version as number;
+        const results = await Promise.all(Array.from({ length: 6 }, () => rsvp(C2, inviteId, 'going')));
+        expect(results.every((r) => r.error === null)).toBe(true);
+        expect((await rsvpRows(inviteId)).filter((r) => r.user_id === C2.id)).toHaveLength(1);
+        expect((await inviteRow(inviteId)).rsvp_version).toBe(v0 + 1);
+      });
+
+      it('171. answering is refused for an unknown or foreign invitation, a cancelled one, one that has started and one whose message was deleted', async () => {
+        const { inviteId, messageId } = await makeInvite(C1);
+        await expectError(rsvp(C2, GHOST_ID, 'going'), 'invite_not_found');
+        await expectError(rsvp(outsider, inviteId, 'going'), 'invite_not_found'); // another team: same answer as "does not exist"
+
+        await admin.from('training_invites').update({ starts_at: inHours(-1) }).eq('id', inviteId);
+        await expectError(rsvp(C2, inviteId, 'going'), 'invite_started');
+        await admin.from('training_invites').update({ starts_at: inHours(30) }).eq('id', inviteId);
+
+        await admin.from('messages').update({ deleted_at: new Date().toISOString() }).eq('id', messageId);
+        await expectError(rsvp(C2, inviteId, 'going'), 'invite_closed'); // a deleted message closes its invitation
+        await admin.from('messages').update({ deleted_at: null }).eq('id', messageId);
+
+        await cancelInvite(C1, inviteId);
+        await expectError(rsvp(C2, inviteId, 'going'), 'invite_closed');
+        await expectError(rsvp(C2, inviteId, null), 'invite_closed');
+      });
+
+      it('172. an answer is not a workout: no workout, points, feed item, chat message, notification or mission progress, and no unread change', async () => {
+        const { inviteId } = await makeInvite(C1);
+        const ids = [C1.id, C2.id, C3.id];
+        const snapshot = async () => ({
+          workouts: (await admin.from('workouts').select('id', { count: 'exact', head: true }).in('user_id', ids)).count,
+          score: (await admin.from('fitness_score_events').select('id', { count: 'exact', head: true }).in('user_id', ids)).count,
+          messages: await messageCount(),
+          notifications: (await admin.from('notifications').select('id', { count: 'exact', head: true }).in('user_id', ids)).count,
+          feed: (await admin.from('activity_feed').select('id', { count: 'exact', head: true }).eq('team_id', cTeamId)).count,
+          audit: (await admin.from('audit_events').select('id', { count: 'exact', head: true }).eq('team_id', cTeamId)).count,
+          mission: Number((await C1.client.rpc('get_team_mission_training_days', { p_team_id: cTeamId, p_start_date: '2020-01-01', p_end_date: '2040-01-01' })).data),
+        });
+        const before = await snapshot();
+        await rsvp(C2, inviteId, 'going');
+        await rsvp(C3, inviteId, 'maybe');
+        await rsvp(C2, inviteId, 'maybe');
+        await rsvp(C3, inviteId, null);
+        expect(await snapshot()).toEqual(before);
+      });
+
+      it('173. the organizer can edit: only a changed time or place is "substantial"; an identical re-submit writes nothing; answers are kept', async () => {
+        const { inviteId, messageId, startsAt } = await makeInvite(C2);
+        await rsvp(C3, inviteId, 'going');
+
+        // Title only: changed, but not worth a notification — and the message is NOT marked edited.
+        const t1 = await C2.client.rpc('update_training_invite', updateArgs(inviteId, { p_title: 'Beine & Rücken & Core', p_starts_at: startsAt }));
+        expect(t1.error).toBeNull();
+        expect(t1.data![0]).toMatchObject({ changed: true, substantial: false, out_message_id: messageId });
+        const msg1 = (await admin.from('messages').select('content, edited_at').eq('id', messageId).single()).data!;
+        expect(msg1.content).toContain('Beine & Rücken & Core');
+        expect(msg1.edited_at).toBeNull();
+        expect((await inviteRow(inviteId)).edited_at).not.toBeNull();
+
+        // Note / type / template link only: still not substantial.
+        const t2 = await C2.client.rpc('update_training_invite', updateArgs(inviteId, { p_title: 'Beine & Rücken & Core', p_starts_at: startsAt, p_note: 'Neu', p_activity_type: 'cardio' }));
+        expect(t2.data![0]).toMatchObject({ changed: true, substantial: false });
+
+        // Identical re-submit: nothing written at all.
+        const editedAt = (await inviteRow(inviteId)).edited_at;
+        const same = await C2.client.rpc('update_training_invite', updateArgs(inviteId, { p_title: 'Beine & Rücken & Core', p_starts_at: startsAt, p_note: 'Neu', p_activity_type: 'cardio' }));
+        expect(same.data![0]).toMatchObject({ changed: false, substantial: false });
+        expect((await inviteRow(inviteId)).edited_at).toBe(editedAt);
+
+        // Time or place: substantial.
+        const later = inHours(50);
+        const time = await C2.client.rpc('update_training_invite', updateArgs(inviteId, { p_title: 'Beine & Rücken & Core', p_starts_at: later, p_note: 'Neu', p_activity_type: 'cardio' }));
+        expect(time.data![0]).toMatchObject({ changed: true, substantial: true });
+        const place = await C2.client.rpc('update_training_invite', updateArgs(inviteId, { p_title: 'Beine & Rücken & Core', p_starts_at: later, p_note: 'Neu', p_activity_type: 'cardio', p_place: 'Parkplatz' }));
+        expect(place.data![0]).toMatchObject({ changed: true, substantial: true });
+
+        expect(await rsvpRows(inviteId)).toEqual(expect.arrayContaining([{ user_id: C3.id, status: 'going' }, { user_id: C2.id, status: 'going' }]));
+        expect(await messageCount()).toBe(await messageCount());
+      });
+
+      it('174. only the organizer may edit or cancel — not another member, not even the team admin — and not once it is closed or has started', async () => {
+        const { inviteId } = await makeInvite(C2);
+        for (const who of [C1, C3, outsider]) {
+          await expectError(who.client.rpc('update_training_invite', updateArgs(inviteId, { p_title: 'Hijack' })), 'invite_not_found');
+          await expectError(cancelInvite(who, inviteId), 'invite_not_found');
+        }
+        await expectError(C2.client.rpc('update_training_invite', updateArgs(GHOST_ID)), 'invite_not_found');
+        await expectError(C2.client.rpc('update_training_invite', updateArgs(inviteId, { p_starts_at: inHours(-2) })), 'invalid_start_time');
+        await expectError(C2.client.rpc('update_training_invite', updateArgs(inviteId, { p_title: '' })), 'invalid_title');
+        expect((await inviteRow(inviteId)).title).toBe('Beine & Rücken');
+
+        await admin.from('training_invites').update({ starts_at: inHours(-1) }).eq('id', inviteId);
+        await expectError(C2.client.rpc('update_training_invite', updateArgs(inviteId)), 'invite_started');
+        await admin.from('training_invites').update({ starts_at: inHours(30) }).eq('id', inviteId);
+
+        await cancelInvite(C2, inviteId);
+        await expectError(C2.client.rpc('update_training_invite', updateArgs(inviteId)), 'invite_closed');
+      });
+
+      it('175. cancelling is idempotent, reports whether it was still upcoming, and is final', async () => {
+        const { inviteId } = await makeInvite(C2);
+        const first = await cancelInvite(C2, inviteId);
+        expect(first.data![0]).toMatchObject({ newly_cancelled: true, was_upcoming: true });
+        expect((await cancelInvite(C2, inviteId)).data![0]).toMatchObject({ newly_cancelled: false });
+        expect((await inviteRow(inviteId)).cancelled_at).not.toBeNull();
+        const undo = await admin.from('training_invites').update({ cancelled_at: null }).eq('id', inviteId);
+        expect(undo.error?.message).toContain('invite_cancellation_is_final');
+
+        // Cancelling something that already started: allowed, but not "upcoming" (no push is warranted).
+        const started = await makeInvite(C2);
+        await admin.from('training_invites').update({ starts_at: inHours(-1) }).eq('id', started.inviteId);
+        expect((await cancelInvite(C2, started.inviteId)).data![0]).toMatchObject({ newly_cancelled: true, was_upcoming: false });
+      });
+
+      it('176. an invitation\'s identity is frozen — message, team and organizer can never be moved, even by the service role', async () => {
+        const a = await makeInvite(C2);
+        const b = await makeInvite(C3);
+        expect((await admin.from('training_invites').update({ message_id: b.messageId }).eq('id', a.inviteId)).error?.message).toContain('invite_identity_is_frozen');
+        expect((await admin.from('training_invites').update({ organizer_id: C3.id }).eq('id', a.inviteId)).error?.message).toContain('invite_identity_is_frozen');
+        expect((await admin.from('training_invites').update({ team_id: outsiderTeamId }).eq('id', a.inviteId)).error?.message).toContain('invite_identity_is_frozen');
+      });
+
+      it('177. a member who leaves disappears from the participant list and loses access; rejoining restores their answer', async () => {
+        const { inviteId } = await makeInvite(C1);
+        await rsvp(C3, inviteId, 'going');
+        const visible = async (who: Who) => ((await who.client.from('training_invite_rsvps').select('user_id').eq('invite_id', inviteId)).data ?? []).map((r) => r.user_id).sort();
+        expect(await visible(C2)).toEqual([C1.id, C3.id].sort());
+
+        await admin.from('team_members').delete().eq('team_id', cTeamId).eq('user_id', C3.id);
+        expect(await visible(C2)).toEqual([C1.id]); // no ghost participant
+        expect((await C3.client.from('training_invites').select('id').eq('id', inviteId)).data ?? []).toEqual([]);
+        await expectError(rsvp(C3, inviteId, 'maybe'), 'invite_not_found');
+
+        await admin.from('team_members').insert({ team_id: cTeamId, user_id: C3.id, role: 'member' });
+        expect(await visible(C2)).toEqual([C1.id, C3.id].sort());
+      });
+
+      it('178. a linked template must be a live share of this team; withdrawing or deleting it never breaks the invitation', async () => {
+        const live = await makeShare(cTeamId, C1);
+        const foreign = await makeShare(outsiderTeamId, outsider);
+        const withdrawn = await makeShare(cTeamId, C1, { withdrawn_at: new Date().toISOString() });
+        await expectError(publish(C1, { p_plan_share_id: foreign }), 'invalid_plan_share');
+        await expectError(publish(C1, { p_plan_share_id: withdrawn }), 'invalid_plan_share');
+        await expectError(publish(C1, { p_plan_share_id: GHOST_ID }), 'invalid_plan_share');
+
+        const { inviteId } = await makeInvite(C1, { p_plan_share_id: live });
+        expect((await inviteRow(inviteId)).plan_share_id).toBe(live);
+        await expectError(C1.client.rpc('update_training_invite', updateArgs(inviteId, { p_plan_share_id: foreign })), 'invalid_plan_share');
+
+        await admin.from('plan_shares').update({ withdrawn_at: new Date().toISOString() }).eq('id', live);
+        expect((await inviteRow(inviteId)).plan_share_id).toBe(live); // link kept; the card just stops offering it
+        await admin.from('plan_shares').delete().eq('id', live);
+        expect((await inviteRow(inviteId)).plan_share_id).toBeNull();
+        expect((await inviteRow(inviteId)).title).toBe('Beine & Rücken');
+      });
+
+      it('179. answers cannot name another team, and deleting the message, the invitation or an account cleans up completely', async () => {
+        const { inviteId, messageId } = await makeInvite(C1);
+        const mismatched = await admin.from('training_invite_rsvps').insert({ invite_id: inviteId, team_id: outsiderTeamId, user_id: C2.id, status: 'going' });
+        expect(mismatched.error).not.toBeNull(); // composite FK (invite_id, team_id)
+
+        await rsvp(C2, inviteId, 'going');
+        await admin.from('messages').delete().eq('id', messageId);
+        expect((await admin.from('training_invites').select('id').eq('id', inviteId)).data).toEqual([]);
+        expect(await rsvpRows(inviteId)).toEqual([]);
+
+        const X = await createTestUser('c-organizer');
+        await admin.from('team_members').insert({ team_id: cTeamId, user_id: X.id, role: 'member' });
+        const mine = await makeInvite(X);
+        await rsvp(C2, mine.inviteId, 'maybe');
+        expect((await admin.auth.admin.deleteUser(X.id)).error).toBeNull();
+        expect((await admin.from('training_invites').select('id').eq('id', mine.inviteId)).data).toEqual([]);
+        expect((await admin.from('messages').select('id').eq('id', mine.messageId)).data).toEqual([]);
+        expect(await rsvpRows(mine.inviteId)).toEqual([]);
+      });
+
+      it('180. the functions are not callable anonymously, and the internal helpers are not callable by clients at all', async () => {
+        const anon = createClient(SUPABASE_URL, ANON_KEY);
+        const calls: [string, Record<string, unknown>][] = [
+          ['publish_training_invite', publishArgs()],
+          ['update_training_invite', updateArgs(GHOST_ID)],
+          ['cancel_training_invite', { p_invite_id: GHOST_ID }],
+          ['set_training_invite_rsvp', { p_invite_id: GHOST_ID, p_status: 'going' }],
+        ];
+        for (const [fn, args] of calls) expect((await anon.rpc(fn, args)).error, fn).not.toBeNull();
+        expect((await C1.client.rpc('normalize_training_invite_fields', { p_title: 'x', p_starts_at: inHours(5), p_activity_type: null, p_place: null, p_note: null, p_plan_share_id: null, p_team_id: cTeamId })).error).not.toBeNull();
+        expect((await C1.client.rpc('training_invite_message_text', { p_title: 'x', p_starts_at: inHours(5) })).error).not.toBeNull();
+      });
+
+      it('181. publish adds exactly one chat message; answering, editing and cancelling add none', async () => {
+        const base = await messageCount();
+        const { inviteId, startsAt } = await makeInvite(C2);
+        expect(await messageCount()).toBe((base ?? 0) + 1);
+        await rsvp(C3, inviteId, 'going');
+        await rsvp(C3, inviteId, null);
+        await C2.client.rpc('update_training_invite', updateArgs(inviteId, { p_title: 'Neu', p_starts_at: startsAt }));
+        await cancelInvite(C2, inviteId);
+        expect(await messageCount()).toBe((base ?? 0) + 1);
+      });
+
+      it('182. the chat sentence shows the Berlin calendar day and time, not UTC (checked just after and just before Berlin midnight)', async () => {
+        const berlinParts = (iso: string) => ({
+          day: new Date(iso).toLocaleDateString('de-DE', { timeZone: 'Europe/Berlin', day: '2-digit', month: '2-digit', year: 'numeric' }),
+          time: new Date(iso).toLocaleTimeString('de-DE', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit', hour12: false }),
+        });
+        // The next two instants whose Berlin wall clock reads 00:30 and 23:30, a few days out.
+        const target = new Date(Date.now() + 3 * 86_400_000);
+        const key = target.toLocaleDateString('sv-SE', { timeZone: 'Europe/Berlin' });
+        for (const hhmm of ['00:30', '23:30']) {
+          const instant = localDateTimeToUtc(`${key}T${hhmm}`)!.toISOString();
+          const { messageId } = await makeInvite(C1, { p_starts_at: instant, p_title: `Mitternacht ${hhmm}` });
+          const { data: msg } = await admin.from('messages').select('content').eq('id', messageId).single();
+          const { day, time } = berlinParts(instant);
+          expect(msg!.content).toBe(`Gemeinsames Training: Mitternacht ${hhmm} · ${day}, ${time} Uhr`);
+          expect(time).toBe(hhmm);
+        }
+      });
+
+      it('183. team_has_member (used by the answers\' RLS) only answers for a team the caller belongs to — it cannot be used to probe other teams\' rosters', async () => {
+        const ask = (who: Who, team: string, user: string) => who.client.rpc('team_has_member', { p_team_id: team, p_user_id: user });
+        expect((await ask(C2, cTeamId, C3.id)).data).toBe(true); // own team: a teammate
+        expect((await ask(C2, cTeamId, outsider.id)).data).toBe(false); // own team: not a member
+        expect((await ask(C2, outsiderTeamId, outsider.id)).data).toBe(false); // another team's real member: indistinguishable from "no"
+        expect((await ask(outsider, cTeamId, C2.id)).data).toBe(false); // an outsider learns nothing about this team
+        expect((await ask(outsider, outsiderTeamId, outsider.id)).data).toBe(true); // ...but their own team works
+      });
+    });
+
+    describe('engagement evaluation (admin-only, aggregate-only)', () => {
+      type Who = typeof userB;
+      const WHITELIST = [
+        'week_start', 'in_progress', 'member_count', 'counted_members', 'active_participants', 'returning_participants',
+        'supported_workouts', 'goal_reached_members', 'missions_started', 'missions_reached', 'missions_cancelled',
+        'duels_accepted', 'duels_finished', 'training_invites_created',
+      ];
+      const berlinTodayKey = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Berlin' });
+      const isoWeekday = (key: string) => {
+        const d = new Date(`${key}T00:00:00Z`).getUTCDay();
+        return d === 0 ? 7 : d;
+      };
+      /** Monday (YYYY-MM-DD, Berlin) of the week `offset` weeks from the current one. */
+      const mondayOf = (offset: number) => {
+        const today = berlinTodayKey();
+        return addDaysToKey(today, -(isoWeekday(today) - 1) + offset * 7);
+      };
+      const at = (key: string, hhmm: string) => localDateTimeToUtc(`${key}T${hhmm}`)!.toISOString();
+
+      const summary = (who: Who, weeks: number | null = 8, team: string = cTeamId) =>
+        who.client.rpc('get_team_engagement_summary', { p_team_id: team, p_weeks: weeks });
+      const weekRow = async (offset: number, weeks = 8) => {
+        const res = await summary(C1, weeks);
+        expect(res.error).toBeNull();
+        const row = (res.data as Record<string, number | boolean | string>[]).find((r) => r.week_start === mondayOf(offset));
+        expect(row, `week ${mondayOf(offset)}`).toBeDefined();
+        return row as Record<string, number | boolean>;
+      };
+      const expectError = async (p: PromiseLike<{ error: { message: string } | null }>, text: string) => {
+        const r = await p;
+        expect(r.error?.message, text).toContain(text);
+      };
+
+      /** A completed workout at an exact instant, through the normal user flow so its chat event exists. */
+      const finishAt = async (user: Who, instant: string) => {
+        const { data: w, error } = await user.client
+          .from('workouts')
+          .insert({ user_id: user.id, team_id: cTeamId, activity_type: 'krafttraining', status: 'laeuft', title: 'Auswertung', started_at: new Date(new Date(instant).getTime() - 20 * 60_000).toISOString() })
+          .select('id')
+          .single();
+        expect(error).toBeNull();
+        const upd = await user.client.from('workouts').update({ status: 'abgeschlossen', finished_at: instant, duration_seconds: 1200 }).eq('id', w!.id);
+        expect(upd.error).toBeNull();
+        return w!.id as string;
+      };
+      const eventOf = async (workoutId: string) => {
+        const { data } = await admin.from('messages').select('id').eq('workout_id', workoutId).eq('event_type', 'workout_completed').single();
+        return data!.id as string;
+      };
+
+      beforeEach(async () => {
+        await admin.from('workouts').delete().in('user_id', [C1.id, C2.id, C3.id]);
+        await admin.from('messages').delete().eq('team_id', cTeamId).eq('message_type', 'system');
+        await admin.from('team_duels').delete().eq('team_id', cTeamId);
+        await admin.from('team_missions').delete().eq('team_id', cTeamId);
+        await admin.from('profiles').update({ weekly_goal: 3 }).in('id', [C1.id, C2.id, C3.id]);
+        await admin.from('privacy_settings').upsert([C1, C2, C3].map((u) => ({ user_id: u.id, activity_feed_opt_in: true })));
+        const { data: members } = await admin.from('team_members').select('user_id').eq('team_id', cTeamId);
+        for (const u of [C1, C2, C3]) {
+          if (!(members ?? []).some((m) => m.user_id === u.id)) await admin.from('team_members').insert({ team_id: cTeamId, user_id: u.id, role: u === C1 ? 'team_admin' : 'member' });
+        }
+      });
+
+      it('184. only a team admin of THAT team can read it — not a member, an admin of another team, an outsider or an anonymous caller', async () => {
+        expect((await summary(C1)).error).toBeNull();
+        for (const who of [C2, C3, outsider, userA]) await expectError(summary(who), 'not_team_admin');
+        await expectError(summary(C1, 4, outsiderTeamId), 'not_team_admin'); // an admin asking about a team that is not theirs
+        const anon = createClient(SUPABASE_URL, ANON_KEY);
+        expect((await anon.rpc('get_team_engagement_summary', { p_team_id: cTeamId, p_weeks: 4 })).error).not.toBeNull();
+      });
+
+      it('185. the result is counts only: exactly the agreed columns, no id, name, text or per-person value', async () => {
+        const res = await summary(C1, 3);
+        expect(res.error).toBeNull();
+        const rows = res.data as Record<string, unknown>[];
+        expect(rows).toHaveLength(3);
+        for (const row of rows) {
+          expect(Object.keys(row).sort()).toEqual([...WHITELIST].sort());
+          for (const [key, value] of Object.entries(row)) {
+            if (key === 'week_start') expect(value).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+            else expect(['number', 'boolean'], key).toContain(typeof value);
+          }
+        }
+        // Nothing person-shaped anywhere in the serialized payload.
+        const raw = JSON.stringify(res.data);
+        for (const user of [C1, C2, C3]) expect(raw).not.toContain(user.id);
+        expect(raw).not.toMatch(/Test|@|full_name|email/i);
+      });
+
+      it('186. the window is clamped to 1–26 Berlin weeks, newest first, consecutive Mondays, only the current week in progress', async () => {
+        expect((await summary(C1, 0)).data).toHaveLength(1);
+        expect((await summary(C1, -5)).data).toHaveLength(1);
+        expect((await summary(C1, 100)).data).toHaveLength(26);
+        expect((await summary(C1, null)).data).toHaveLength(8);
+        const rows = (await summary(C1, 6)).data as { week_start: string; in_progress: boolean }[];
+        expect(rows.map((r) => r.week_start)).toEqual([0, -1, -2, -3, -4, -5].map(mondayOf));
+        expect(rows.map((r) => r.in_progress)).toEqual([true, false, false, false, false, false]);
+      });
+
+      it('187. a week is Monday to Sunday in Berlin time: Sunday 23:30 and Monday 00:30 land in different weeks; returning means active the week before too', async () => {
+        const thisMonday = mondayOf(0);
+        const lastMonday = mondayOf(-1);
+        await finishAt(C2, at(thisMonday, '00:30')); // first minutes of this week
+        await finishAt(C2, at(addDaysToKey(thisMonday, -1), '23:30')); // last minutes of last week
+        await finishAt(C3, at(addDaysToKey(lastMonday, 2), '12:00')); // only last week
+
+        const current = await weekRow(0);
+        const previous = await weekRow(-1);
+        expect(current.active_participants).toBe(1);
+        expect(current.returning_participants).toBe(1); // C2 was active last week too
+        expect(previous.active_participants).toBe(2);
+        expect(previous.returning_participants).toBe(0); // nobody was active the week before that
+        expect(current.in_progress).toBe(true);
+        expect(previous.in_progress).toBe(false);
+      });
+
+      it('188. weekly-goal completion uses each member\'s own goal and workout count; many workouts still count a member once', async () => {
+        const last = mondayOf(-1);
+        await admin.from('profiles').update({ weekly_goal: 2 }).eq('id', C2.id);
+        await admin.from('profiles').update({ weekly_goal: 3 }).eq('id', C3.id);
+        await finishAt(C2, at(addDaysToKey(last, 1), '09:00'));
+        await finishAt(C2, at(addDaysToKey(last, 1), '19:00')); // same day: still two workouts toward the goal
+        await finishAt(C2, at(addDaysToKey(last, 2), '12:00'));
+        await finishAt(C3, at(addDaysToKey(last, 1), '12:00'));
+        await finishAt(C3, at(addDaysToKey(last, 3), '12:00')); // two of three
+        const row = await weekRow(-1);
+        expect(row.active_participants).toBe(2); // C2 once, despite three workouts
+        expect(row.goal_reached_members).toBe(1); // C2 (goal 2) yes, C3 (goal 3) not yet
+      });
+
+      it('189. members who do not share their activity, and members who left, are not counted — and the gap is visible', async () => {
+        const last = mondayOf(-1);
+        await finishAt(C2, at(addDaysToKey(last, 1), '12:00'));
+        await finishAt(C3, at(addDaysToKey(last, 2), '12:00'));
+        let row = await weekRow(-1);
+        expect(row).toMatchObject({ active_participants: 2, member_count: 3, counted_members: 3 });
+
+        await admin.from('privacy_settings').upsert({ user_id: C2.id, activity_feed_opt_in: false });
+        row = await weekRow(-1);
+        expect(row).toMatchObject({ active_participants: 1, member_count: 3, counted_members: 2 });
+        await admin.from('privacy_settings').upsert({ user_id: C2.id, activity_feed_opt_in: true });
+
+        await admin.from('team_members').delete().eq('team_id', cTeamId).eq('user_id', C3.id);
+        row = await weekRow(-1);
+        expect(row).toMatchObject({ active_participants: 1, member_count: 2, counted_members: 2 });
+        await admin.from('team_members').insert({ team_id: cTeamId, user_id: C3.id, role: 'member' });
+        expect((await weekRow(-1)).active_participants).toBe(2);
+      });
+
+      it('190. a supported workout is one a teammate reacted to or replied to — counted once, in the workout\'s own week, never for self-reactions, departed people or deleted events', async () => {
+        const last = mondayOf(-1);
+        const w1 = await finishAt(C2, at(addDaysToKey(last, 1), '12:00'));
+        const w2 = await finishAt(C2, at(addDaysToKey(last, 2), '12:00'));
+        const w3 = await finishAt(C3, at(addDaysToKey(last, 3), '12:00'));
+        const [e1, e2, e3] = [await eventOf(w1), await eventOf(w2), await eventOf(w3)];
+        const supported = async () => (await weekRow(-1)).supported_workouts;
+        expect(await supported()).toBe(0);
+
+        const react = (messageId: string, who: { id: string }, type = 'heart') =>
+          admin.from('message_reactions').insert({ message_id: messageId, team_id: cTeamId, user_id: who.id, reaction_type: type });
+        await react(e1, C2); // the owner reacting to their own workout does not count
+        expect(await supported()).toBe(0);
+        await react(e1, C3); // a teammate does
+        expect(await supported()).toBe(1);
+        await react(e1, C1); // a second supporter of the SAME workout is not a second supported workout
+        await react(e1, C3, 'fire');
+        expect(await supported()).toBe(1);
+
+        const reply = (parent: string, who: { id: string }, extra: Record<string, unknown> = {}) =>
+          admin.from('messages').insert({ team_id: cTeamId, user_id: who.id, content: 'stark!', message_type: 'text', parent_message_id: parent, ...extra }).select('id').single();
+        const r2 = await reply(e2, C3); // a text reply counts too
+        expect(await supported()).toBe(2);
+        await admin.from('messages').update({ deleted_at: new Date().toISOString() }).eq('id', r2.data!.id); // ...until it is deleted
+        expect(await supported()).toBe(1);
+        await reply(e3, C3); // the owner replying to their own workout does not count
+        await reply(e3, C3, { content: 'x' });
+        expect(await supported()).toBe(1);
+
+        await react(e3, outsider); // someone who is not (or no longer) in the team does not count
+        expect(await supported()).toBe(1);
+        await admin.from('messages').update({ deleted_at: new Date().toISOString() }).eq('id', e1); // a deleted event drops out
+        expect(await supported()).toBe(0);
+
+        expect((await weekRow(0)).supported_workouts).toBe(0); // bucketed by the workout's week, not by when anyone reacted
+      });
+
+      it('191. missions, duels and invitations are counted per start week — duel outcomes and invitation answers are not exposed', async () => {
+        const thisMonday = mondayOf(0);
+        const lastMonday = mondayOf(-1);
+        // Missions: one reached, one cancelled, one not reached — all starting last week.
+        const mission = (over: Record<string, unknown>) =>
+          admin.from('team_missions').insert({ team_id: cTeamId, title: 'M', target_days: 1, starts_at: lastMonday, ends_at: addDaysToKey(lastMonday, 6), created_by: C1.id, ...over });
+        await mission({ title: 'erreicht' });
+        await mission({ title: 'abgebrochen', target_days: 50, cancelled_at: new Date().toISOString() });
+        await mission({ title: 'offen', target_days: 50 });
+        await finishAt(C2, at(addDaysToKey(lastMonday, 1), '12:00'));
+        // Duels: one accepted-and-finished, one accepted-then-cancelled, one never accepted — all starting last week.
+        const duel = (over: Record<string, unknown>) =>
+          admin.from('team_duels').insert({
+            team_id: cTeamId, inviter_id: C2.id, invitee_id: C3.id, target_days: 3, starts_on: lastMonday, ends_on: addDaysToKey(lastMonday, 6),
+            expires_at: new Date(Date.now() + 86_400_000).toISOString(), ...over,
+          });
+        await duel({ status: 'accepted', responded_at: new Date().toISOString() });
+        await duel({ status: 'cancelled', responded_at: new Date().toISOString(), cancelled_by: C2.id });
+        await duel({ status: 'declined', responded_at: new Date().toISOString() });
+        await duel({ status: 'pending' });
+        // Invitations created now (this week).
+        await C2.client.rpc('publish_training_invite', { p_invite_id: crypto.randomUUID(), p_team_id: cTeamId, p_title: 'Zählt', p_starts_at: new Date(Date.now() + 30 * 3_600_000).toISOString(), p_activity_type: null, p_place: null, p_note: null, p_plan_share_id: null });
+
+        const last = await weekRow(-1);
+        expect(last).toMatchObject({ missions_started: 3, missions_reached: 1, missions_cancelled: 1, duels_accepted: 2, duels_finished: 1 });
+        const current = await weekRow(0);
+        expect(current.training_invites_created).toBeGreaterThanOrEqual(1);
+        expect(thisMonday).not.toBe(lastMonday);
+
+        // A participant leaving the team takes the duel out of the numbers.
+        await admin.from('team_members').delete().eq('team_id', cTeamId).eq('user_id', C3.id);
+        expect((await weekRow(-1)).duels_accepted).toBe(0);
+        await admin.from('team_members').insert({ team_id: cTeamId, user_id: C3.id, role: 'member' });
+      });
+
+      it('192. an empty team answers with zeros, and reading the summary writes nothing', async () => {
+        const { data: team } = await admin.from('teams').insert({ name: `Empty Eval ${Date.now()}`, slug: `empty-eval-${Date.now()}` }).select('id').single();
+        const E = await createTestUser('c-empty-admin');
+        await admin.from('team_members').insert({ team_id: team!.id, user_id: E.id, role: 'team_admin' });
+        const res = await E.client.rpc('get_team_engagement_summary', { p_team_id: team!.id, p_weeks: 3 });
+        expect(res.error).toBeNull();
+        for (const row of res.data as Record<string, number | boolean | string>[]) {
+          expect(row).toMatchObject({ member_count: 1, counted_members: 1, active_participants: 0, returning_participants: 0, supported_workouts: 0, goal_reached_members: 0, missions_started: 0, duels_accepted: 0, training_invites_created: 0 });
+        }
+
+        const count = async (table: string) => (await admin.from(table).select('id', { count: 'exact', head: true }).eq('team_id', cTeamId)).count;
+        const before = [await count('messages'), await count('audit_events'), await count('activity_feed')];
+        await summary(C1, 8);
+        expect([await count('messages'), await count('audit_events'), await count('activity_feed')]).toEqual(before);
+
+        await admin.from('teams').delete().eq('id', team!.id);
+        await admin.auth.admin.deleteUser(E.id).catch(() => undefined);
       });
     });
   });

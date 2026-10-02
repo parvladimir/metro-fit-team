@@ -6,6 +6,8 @@ import { ImagePlus, Layers, Loader2, MessageCircle, X } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { sendMessageAction, sendImageMessageAction, markChatReadAction, loadOlderMessagesAction } from '@/app/(app)/team/chat/actions';
 import { withdrawShareAction } from '@/app/(app)/team/chat/share-actions';
+import { cancelTrainingInviteAction, setRsvpAction } from '@/app/(app)/team/training/actions';
+import { TrainingInviteCard } from '@/components/training/TrainingInviteCard';
 import { ChatImage } from '@/components/chat/ChatImage';
 import { SharedPlanCard } from '@/components/sharing/SharedPlanCard';
 import { ShareDetailSheet } from '@/components/sharing/ShareDetailSheet';
@@ -13,6 +15,7 @@ import { ImportShareDialog } from '@/components/sharing/ImportShareDialog';
 import { SharePickerSheet } from '@/components/sharing/SharePickerSheet';
 import type { PlanShareForViewer, PlanShareWithItems } from '@/lib/data/plan-shares';
 import type { PlanTemplateWithItems } from '@/lib/data/plan-templates';
+import { TRAINING_INVITE_SELECT, applyOwnRsvp, toInviteForViewer, type RawInviteRow, type RsvpStatus, type TrainingInviteForViewer } from '@/lib/training-invites';
 import { SystemEventCard } from '@/components/chat/SystemEventCard';
 import { isSameLocalDay, formatChatDayLabel } from '@/lib/date';
 import { ImageError, prepareChatImage, type PreparedImage } from '@/lib/image-compress';
@@ -54,6 +57,7 @@ export function ChatRoom({
   initialHasMore,
   initialQuotes,
   initialShares,
+  initialInvites,
   myTemplates,
 }: {
   teamId: string;
@@ -68,6 +72,7 @@ export function ChatRoom({
   initialHasMore: boolean;
   initialQuotes: Record<string, QuoteInfo>;
   initialShares: Record<string, PlanShareForViewer>;
+  initialInvites: Record<string, TrainingInviteForViewer>;
   myTemplates: PlanTemplateWithItems[];
 }) {
   const [messages, setMessages] = useState(initialMessages);
@@ -78,6 +83,14 @@ export function ChatRoom({
   const [viewingShare, setViewingShare] = useState<PlanShareForViewer | null>(null);
   const [savingShare, setSavingShare] = useState<PlanShareForViewer | null>(null);
   const [pickingTemplate, setPickingTemplate] = useState(false);
+  // "Wer ist dabei?" cards, keyed by message id. The ref mirrors the state so the
+  // realtime handlers (created once per mount) always see the current cards.
+  const [invites, setInvites] = useState(initialInvites);
+  const invitesRef = useRef(initialInvites);
+  const inviteTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  // Own answers currently in flight per invitation: a live refresh that lands
+  // meanwhile must not overwrite the tap the user just made.
+  const pendingRsvpRef = useRef<Map<string, number>>(new Map());
   const messagesRef = useRef<ChatMessage[]>(initialMessages);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const restoreScrollRef = useRef<number | null>(null);
@@ -149,8 +162,31 @@ export function ChatRoom({
 
   useEffect(() => {
     const supabase = createClient();
-    let channel: ReturnType<typeof supabase.channel> | null = null;
+    let channels: ReturnType<typeof supabase.channel>[] = [];
     let cancelled = false;
+    const inviteTimers = inviteTimersRef.current; // a stable Map, never reassigned
+
+    /** Fetches one invitation and replaces its card. `expectedMessageId` is set when the
+     * hint came from a message's metadata: only an invitation actually bound to THAT message
+     * may render there (a member can write arbitrary metadata on their own message). */
+    async function fetchInvite(inviteId: string, expectedMessageId?: string) {
+      const { data } = await supabase.from('training_invites').select(TRAINING_INVITE_SELECT).eq('id', inviteId).maybeSingle();
+      if (!data || cancelled) return;
+      const raw = data as unknown as RawInviteRow;
+      if (expectedMessageId && raw.message_id !== expectedMessageId) return;
+      const next = toInviteForViewer(raw, currentUserId);
+      setInvites((prev) => {
+        const existing = prev[next.messageId];
+        const keepMine = existing && (pendingRsvpRef.current.get(next.id) ?? 0) > 0;
+        return { ...prev, [next.messageId]: keepMine ? { ...next, myStatus: existing.myStatus } : next };
+      });
+    }
+    /** One trailing 250ms-debounced refetch per invitation, however many events arrive. */
+    function scheduleInviteRefetch(inviteId: string) {
+      if (!Object.values(invitesRef.current).some((i) => i.id === inviteId)) return; // not on screen
+      clearTimeout(inviteTimers.get(inviteId));
+      inviteTimers.set(inviteId, setTimeout(() => { inviteTimers.delete(inviteId); void fetchInvite(inviteId); }, 250));
+    }
 
     // IMPORTANT: @supabase/ssr's browser client loads the session from
     // cookies asynchronously. Subscribing before that resolves opens the
@@ -163,7 +199,8 @@ export function ChatRoom({
       if (cancelled) return;
       if (session) supabase.realtime.setAuth(session.access_token);
 
-      channel = supabase
+      // The core chat channel: only tables that have always existed and are published.
+      const main = supabase
         .channel(`messages:${teamId}`)
         .on(
           'postgres_changes',
@@ -218,7 +255,9 @@ export function ChatRoom({
                 .select('*, plan_share_items(*), profiles(full_name)')
                 .eq('id', shareId)
                 .maybeSingle();
-              if (s) {
+              // Only a share actually bound to THIS message may render on it — a member can
+              // write arbitrary metadata on their own message, so the hint alone proves nothing.
+              if (s && (s as unknown as { message_id: string }).message_id === row.id) {
                 const { plan_share_items, profiles, ...share } = s as unknown as PlanShareWithItems & {
                   plan_share_items: PlanShareWithItems['items'];
                   profiles: { full_name: string | null } | null;
@@ -234,6 +273,10 @@ export function ChatRoom({
                 }));
               }
             }
+            // Same idea for a joint-training card: the invitation id rides in the
+            // message's metadata from its very first INSERT.
+            const inviteHintId = typeof row.metadata?.training_invite_id === 'string' ? row.metadata.training_invite_id : null;
+            if (!alreadyHave && inviteHintId) await fetchInvite(inviteHintId, row.id);
             // The sender already added the persisted row from the server response —
             // the message id is the source of truth, so never add it twice.
             setMessages((prev) =>
@@ -264,12 +307,6 @@ export function ChatRoom({
             setMessages((prev) => prev.map((m) => (m.id === row.id ? { ...m, content: row.content, edited_at: row.edited_at, metadata: row.metadata } : m)));
           }
         })
-        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'plan_shares', filter: `team_id=eq.${teamId}` }, (payload) => {
-          // Only withdrawn_at ever changes after publish (the snapshot itself
-          // is immutable) — reflect it live for every viewer, not just the author.
-          const row = payload.new as { message_id: string; withdrawn_at: string | null };
-          setShares((prev) => (prev[row.message_id] ? { ...prev, [row.message_id]: { ...prev[row.message_id]!, withdrawn_at: row.withdrawn_at } } : prev));
-        })
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'message_mentions', filter: `team_id=eq.${teamId}` }, (payload) => {
           const r = payload.new as { message_id: string; mentioned_user_id: string; mention_text: string };
           setMentionsMap((prev) => {
@@ -296,11 +333,48 @@ export function ChatRoom({
           if (r.message_id && r.user_id && r.reaction_type) updateReactions(r.message_id, r.user_id, r.reaction_type, false);
         })
         .subscribe();
+
+      // Card updates live on their OWN channels. Realtime rejects a whole channel when any
+      // one binding names a table that does not exist or is not in the publication, and a
+      // channel that is rejected delivers nothing — so a card feature whose table is not
+      // available (e.g. the app is deployed a moment before its migration, or a table was
+      // never published) must never be able to silence live messages, reactions and
+      // mentions. Each of these only ever costs its own live updates.
+      const sharesChannel = supabase
+        .channel(`plan-shares:${teamId}`)
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'plan_shares', filter: `team_id=eq.${teamId}` }, (payload) => {
+          // Only withdrawn_at ever changes after publish (the snapshot itself
+          // is immutable) — reflect it live for every viewer, not just the author.
+          const row = payload.new as { message_id: string; withdrawn_at: string | null };
+          setShares((prev) => (prev[row.message_id] ? { ...prev, [row.message_id]: { ...prev[row.message_id]!, withdrawn_at: row.withdrawn_at } } : prev));
+        })
+        .subscribe();
+
+      const trainingChannel = supabase
+        .channel(`training-invites:${teamId}`)
+        // Any real change to an invitation arrives as an UPDATE — its own edits and
+        // cancellation, and every change to an answer (including a removal, whose
+        // DELETE event could not be routed to a card, via the rsvp_version bump).
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'training_invites', filter: `team_id=eq.${teamId}` }, (payload) => {
+          scheduleInviteRefetch((payload.new as { id: string }).id);
+        })
+        // Belt and braces: new / changed answers also announce themselves directly.
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'training_invite_rsvps', filter: `team_id=eq.${teamId}` }, (payload) => {
+          scheduleInviteRefetch((payload.new as { invite_id: string }).invite_id);
+        })
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'training_invite_rsvps', filter: `team_id=eq.${teamId}` }, (payload) => {
+          scheduleInviteRefetch((payload.new as { invite_id: string }).invite_id);
+        })
+        .subscribe();
+
+      channels = [main, sharesChannel, trainingChannel];
     });
 
     return () => {
       cancelled = true;
-      if (channel) supabase.removeChannel(channel);
+      inviteTimers.forEach((timer) => clearTimeout(timer));
+      inviteTimers.clear();
+      channels.forEach((c) => supabase.removeChannel(c));
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [teamId, currentUserId]);
@@ -354,6 +428,43 @@ export function ChatRoom({
     });
   }
 
+  /** The viewer's own answer on a "Wer ist dabei?" card — optimistic, like setReaction: the
+   * tap shows at once; a failure puts back what it replaced, unless a newer tap already
+   * changed it again. The realtime refresh then confirms whatever actually landed. */
+  async function setRsvp(invite: TrainingInviteForViewer, next: RsvpStatus | null) {
+    const previous = invitesRef.current[invite.messageId]?.myStatus ?? null;
+    pendingRsvpRef.current.set(invite.id, (pendingRsvpRef.current.get(invite.id) ?? 0) + 1);
+    setInvites((prev) => (prev[invite.messageId] ? { ...prev, [invite.messageId]: applyOwnRsvp(prev[invite.messageId]!, next) } : prev));
+    let ok = false;
+    try {
+      const res = await setRsvpAction(invite.id, next);
+      ok = res.ok;
+      if (!res.ok) setSendError(res.error);
+    } catch {
+      ok = false;
+      setSendError('Das hat nicht geklappt. Bitte versuche es noch einmal.');
+    } finally {
+      const left = (pendingRsvpRef.current.get(invite.id) ?? 1) - 1;
+      if (left <= 0) pendingRsvpRef.current.delete(invite.id);
+      else pendingRsvpRef.current.set(invite.id, left);
+    }
+    if (!ok) {
+      setInvites((prev) => {
+        const cur = prev[invite.messageId];
+        return cur && cur.myStatus === next ? { ...prev, [invite.messageId]: applyOwnRsvp(cur, previous) } : prev;
+      });
+    }
+  }
+
+  async function cancelInvite(invite: TrainingInviteForViewer) {
+    const res = await cancelTrainingInviteAction(invite.id).catch(() => ({ ok: false as const, error: 'Das hat nicht geklappt. Bitte versuche es noch einmal.' }));
+    if (!res.ok) {
+      setSendError(res.error);
+      return;
+    }
+    setInvites((prev) => (prev[invite.messageId] ? { ...prev, [invite.messageId]: { ...prev[invite.messageId]!, cancelledAt: new Date().toISOString() } } : prev));
+  }
+
   async function loadOlder(): Promise<boolean> {
     const oldest = messagesRef.current[0];
     if (!oldest || loadingOlder) return false;
@@ -370,6 +481,7 @@ export function ChatRoom({
       setReactions((prev) => ({ ...res.reactions, ...prev }));
       setQuotes((prev) => ({ ...res.quotes, ...prev }));
       setShares((prev) => ({ ...res.shares, ...prev }));
+      setInvites((prev) => ({ ...res.invites, ...prev }));
       setHasMore(res.hasMore);
       return res.hasMore;
     } finally {
@@ -378,6 +490,7 @@ export function ChatRoom({
   }
 
   messagesRef.current = messages;
+  invitesRef.current = invites;
 
   /** Scroll to + briefly highlight the message a reply answers (loads older history if needed). */
   async function jumpTo(id: string) {
@@ -605,6 +718,44 @@ export function ChatRoom({
                     onChange={setReaction}
                     className="mx-auto mt-1.5 w-full max-w-[88%] justify-center"
                   />
+                </div>
+              );
+            }
+
+            // A "Wer ist dabei?" invitation renders as its own card, whoever wrote it
+            // (so it comes before the creator-card branch). It has no generic edit/delete
+            // menu: the card itself offers Bearbeiten / Absagen to its organizer.
+            const invite = invites[m.id];
+            if (invite) {
+              return (
+                <div
+                  key={m.id}
+                  id={`msg-${m.id}`}
+                  className={`rounded-2xl transition-shadow duration-500 ${highlightId === m.id ? 'shadow-[0_0_0_2px_rgba(0,215,245,0.55)]' : ''}`}
+                >
+                  {dateLabel}
+                  {m.id === firstUnreadId && (
+                    <div className="mb-3 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-brand">
+                      <span className="h-px flex-1 bg-brand/25" />
+                      {t('chat.newMessages')}
+                      <span className="h-px flex-1 bg-brand/25" />
+                    </div>
+                  )}
+                  <div className={`flex items-end gap-2 ${mine ? 'flex-row-reverse' : 'flex-row'}`}>
+                    {!mine && <Avatar src={m.authorAvatar} name={m.authorName} size="sm" />}
+                    <div className={`flex min-w-0 flex-col ${mine ? 'items-end' : 'items-start'}`}>
+                      {!mine && (
+                        <span className={`mb-0.5 px-1 text-[11px] font-medium ${isFormerMember ? 'italic text-neutral-500' : 'text-neutral-400'}`}>
+                          {m.authorName}
+                        </span>
+                      )}
+                      <TrainingInviteCard invite={invite} currentUserId={currentUserId} onRsvp={setRsvp} onCancel={cancelInvite} />
+                      <span className="mt-0.5 px-1 text-[10px] text-neutral-400">
+                        {new Date(m.created_at).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                      <ReactionChips messageId={m.id} currentUserId={currentUserId} state={reactions[m.id]} onChange={setReaction} className="mt-1 px-1" />
+                    </div>
+                  </div>
                 </div>
               );
             }
