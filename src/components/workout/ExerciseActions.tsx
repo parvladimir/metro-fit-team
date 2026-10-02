@@ -2,11 +2,13 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { ListEnd, MoreHorizontal, Replace } from 'lucide-react';
-import type { PickerExercise } from '@/components/exercises/ExercisePicker';
+import { ListEnd, MoreHorizontal, PlusCircle, Replace } from 'lucide-react';
+import type { PickerExercise, PickerFavorites } from '@/components/exercises/ExercisePicker';
+import { AddExerciseSheet } from '@/components/workout/AddExerciseSheet';
 import { ReplaceExerciseSheet } from '@/components/workout/ReplaceExerciseSheet';
 import { Sheet } from '@/components/ui/Sheet';
 import { postponeExerciseAction, type ReplaceExerciseResult } from '@/app/(app)/aktivitaet/workout-exercise-actions';
+import { setExerciseFavoriteAction, type AddExerciseResult } from '@/app/(app)/aktivitaet/exercise-library-actions';
 import { clearDraft } from '@/lib/workout-drafts';
 import type { ExerciseType } from '@/types/database';
 
@@ -22,6 +24,7 @@ export interface ExerciseRowInfo {
 interface ExerciseActionsValue {
   enabled: boolean;
   openMenu: (workoutExerciseId: string) => void;
+  openAdd: () => void;
   /** Lets an exercise's input form say whether it holds unsaved input. Returns the unregister function. */
   registerDraftProbe: (workoutExerciseId: string, probe: () => boolean) => () => void;
   /** True once an exercise row was replaced away in this workout (its draft must not be written again). */
@@ -31,6 +34,7 @@ interface ExerciseActionsValue {
 const NOOP: ExerciseActionsValue = {
   enabled: false,
   openMenu: () => undefined,
+  openAdd: () => undefined,
   registerDraftProbe: () => () => undefined,
   isRowRemoved: () => false,
 };
@@ -71,6 +75,8 @@ export function ExerciseActionsProvider({
   enabled,
   rows,
   catalogue,
+  favoriteIds,
+  recentIds,
   children,
 }: {
   userId: string;
@@ -79,6 +85,10 @@ export function ExerciseActionsProvider({
   enabled: boolean;
   rows: ExerciseRowInfo[];
   catalogue: PickerExercise[];
+  /** The user's favourite exercises; null while the database has no favourites table yet (no stars, no tab). */
+  favoriteIds: string[] | null;
+  /** Recently performed exercises, most recent first; null while the database function is missing (no tab). */
+  recentIds: string[] | null;
   children: React.ReactNode;
 }) {
   const router = useRouter();
@@ -86,8 +96,43 @@ export function ExerciseActionsProvider({
   const removed = useRef(new Set<string>());
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [replaceFor, setReplaceFor] = useState<string | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
   const [, startTransition] = useTransition();
+
+  // ---- favourites: optimistic, reverted if the server refuses (and only if no newer tap came in meanwhile) ----
+  const [favorites, setFavorites] = useState<Set<string>>(() => new Set(favoriteIds ?? []));
+  const favoriteSeq = useRef(new Map<string, number>());
+  const setFavoriteLocal = useCallback((exerciseId: string, favorite: boolean) => {
+    setFavorites((prev) => {
+      const next = new Set(prev);
+      if (favorite) next.add(exerciseId);
+      else next.delete(exerciseId);
+      return next;
+    });
+  }, []);
+  const toggleFavorite = useCallback(
+    (exerciseId: string, favorite: boolean) => {
+      const seq = (favoriteSeq.current.get(exerciseId) ?? 0) + 1;
+      favoriteSeq.current.set(exerciseId, seq);
+      setFavoriteLocal(exerciseId, favorite);
+      const revert = (text: string) => {
+        if (favoriteSeq.current.get(exerciseId) !== seq) return;
+        setFavoriteLocal(exerciseId, !favorite);
+        setToast({ text, tone: 'error' });
+      };
+      startTransition(async () => {
+        try {
+          const res = await setExerciseFavoriteAction({ exerciseId, favorite });
+          if (!res.ok) revert(res.error);
+        } catch {
+          revert('Keine Verbindung. Der Favorit wurde nicht gespeichert.');
+        }
+      });
+    },
+    [setFavoriteLocal],
+  );
+  const pickerFavorites = useMemo<PickerFavorites | null>(() => (favoriteIds === null ? null : { ids: favorites, onToggle: toggleFavorite }), [favoriteIds, favorites, toggleFavorite]);
 
   const rowById = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
 
@@ -99,6 +144,7 @@ export function ExerciseActionsProvider({
   }, []);
   const isRowRemoved = useCallback((id: string) => removed.current.has(id), []);
   const openMenu = useCallback((id: string) => setMenuFor(id), []);
+  const openAdd = useCallback(() => setAddOpen(true), []);
 
   useEffect(() => {
     if (!toast) return;
@@ -143,7 +189,14 @@ export function ExerciseActionsProvider({
     scrollToCard(res.newWorkoutExerciseId);
   }
 
-  const value = useMemo<ExerciseActionsValue>(() => ({ enabled, openMenu, registerDraftProbe, isRowRemoved }), [enabled, openMenu, registerDraftProbe, isRowRemoved]);
+  function added(res: Extract<AddExerciseResult, { ok: true }>, exercise: PickerExercise) {
+    setAddOpen(false);
+    setToast({ text: `${exercise.name} wurde am Ende dieses Trainings hinzugefügt.`, tone: 'ok' });
+    scrollToCard(res.workoutExerciseId);
+  }
+
+  const createHref = `/uebungen/neu?returnTo=${encodeURIComponent(`/aktivitaet/training/${workoutId}`)}`;
+  const value = useMemo<ExerciseActionsValue>(() => ({ enabled, openMenu, openAdd, registerDraftProbe, isRowRemoved }), [enabled, openMenu, openAdd, registerDraftProbe, isRowRemoved]);
 
   const menuRow = menuFor ? rowById.get(menuFor) : undefined;
   const replaceRow = replaceFor ? rowById.get(replaceFor) : undefined;
@@ -191,12 +244,16 @@ export function ExerciseActionsProvider({
           target={{ id: replaceRow.id, exerciseId: replaceRow.exerciseId, name: replaceRow.name, hasSets: replaceRow.hasSets }}
           catalogue={catalogue}
           hasUnsavedInput={probes.current.get(replaceRow.id)?.() ?? false}
-          createHref={`/uebungen/neu?returnTo=${encodeURIComponent(`/aktivitaet/training/${workoutId}`)}`}
+          createHref={createHref}
+          favorites={pickerFavorites}
+          recentIds={recentIds}
           onClose={() => setReplaceFor(null)}
           onDone={replaced}
           onRefused={() => router.refresh()}
         />
       )}
+
+      {addOpen && <AddExerciseSheet workoutId={workoutId} catalogue={catalogue} favorites={pickerFavorites} recentIds={recentIds} createHref={createHref} onClose={() => setAddOpen(false)} onDone={added} />}
 
       <div className="pointer-events-none fixed inset-x-0 z-[60] flex justify-center px-4" style={{ top: 'max(0.75rem, env(safe-area-inset-top))' }}>
         {toast && (
@@ -228,5 +285,19 @@ export function ExerciseMenuButton({ workoutExerciseId, exerciseName }: { workou
     >
       <MoreHorizontal size={20} />
     </button>
+  );
+}
+
+/** The "Übung hinzufügen" card at the end of the exercise list: one button that opens the picker. */
+export function AddExerciseCard() {
+  const { openAdd } = useExerciseActions();
+  return (
+    <div className="card flex flex-col gap-3">
+      <p className="text-sm font-semibold text-neutral-800">Übung hinzufügen</p>
+      <button type="button" onClick={openAdd} className="btn-secondary min-h-[44px]">
+        <PlusCircle size={17} strokeWidth={2} />
+        Übung auswählen
+      </button>
+    </div>
   );
 }

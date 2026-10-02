@@ -1,14 +1,13 @@
-import Link from 'next/link';
 import { BackLink } from '@/components/ui/BackLink';
 import { notFound, redirect } from 'next/navigation';
 import { requireAuthUser, getCurrentProfile, getPrimaryTeamMembership } from '@/lib/data/profile';
 import { getWorkoutDetail, calculateVolumeKg } from '@/lib/data/workouts';
 import { getExerciseCatalogue } from '@/lib/data/plan';
 import { getLastExerciseResults } from '@/lib/data/exercise-history';
-import { addWorkoutExerciseAction, deleteSetAction, skipWorkoutAction, startReviewAction } from '../../actions';
-import { PlusCircle } from 'lucide-react';
+import { getFavoriteExerciseIds, getRecentExerciseIds } from '@/lib/data/exercise-library';
+import { deleteSetAction, skipWorkoutAction, startReviewAction } from '../../actions';
 import { SetLogger, type SavedSet } from '@/components/workout/SetLogger';
-import { ExerciseActionsProvider, ExerciseMenuButton, type ExerciseRowInfo } from '@/components/workout/ExerciseActions';
+import { AddExerciseCard, ExerciseActionsProvider, ExerciseMenuButton, type ExerciseRowInfo } from '@/components/workout/ExerciseActions';
 import { WorkoutTimerDisplay } from '@/components/workout/WorkoutTimerDisplay';
 import { PauseResumeButton } from '@/components/workout/PauseResumeButton';
 import { DiscardWorkoutButton } from '@/components/workout/DiscardWorkoutButton';
@@ -41,7 +40,12 @@ export default async function TrainingDetailPage({ params }: { params: Promise<{
 
   const membership = profile ? await getPrimaryTeamMembership(profile.id) : null;
   // One batched lookup for the whole screen — the earlier results of every exercise in this workout.
-  const [catalogue, lastLoad] = await Promise.all([getExerciseCatalogue(membership?.team_id ?? null), getLastExerciseResults(id)]);
+  const [catalogue, lastLoad, favorites, recents] = await Promise.all([
+    getExerciseCatalogue(membership?.team_id ?? null),
+    getLastExerciseResults(id),
+    getFavoriteExerciseIds(),
+    getRecentExerciseIds(),
+  ]);
   const volume = calculateVolumeKg(workout.workoutExercises);
 
   // Until the database has the new functions (they ship with a separate, later step) the controls that
@@ -95,6 +99,9 @@ export default async function TrainingDetailPage({ params }: { params: Promise<{
         enabled={featuresAvailable}
         rows={rows}
         catalogue={catalogue.map(({ id: exId, name, exercise_type, muscle_group, is_custom }) => ({ id: exId, name, exercise_type, muscle_group, is_custom }))}
+        // A missing table / function (the migration is applied in a separate, later step) hides the stars / the tab.
+        favoriteIds={favorites.status === 'ok' ? favorites.ids : null}
+        recentIds={recents.status === 'ok' ? recents.ids : null}
       >
       <div className="flex flex-col gap-4">
         {workout.workoutExercises.map((we) => (
@@ -144,35 +151,9 @@ export default async function TrainingDetailPage({ params }: { params: Promise<{
           </div>
         ))}
       </div>
-      </ExerciseActionsProvider>
 
-      <form action={addWorkoutExerciseAction} className="card flex flex-col gap-3">
-        <input type="hidden" name="workoutId" value={workout.id} />
-        <p className="text-sm font-semibold text-neutral-800">{t('workout.addExercise')}</p>
-        <select name="exerciseId" required defaultValue="" className="input-field block w-full min-w-0 truncate">
-          <option value="" disabled>{t('exercise.library.title')}</option>
-          {catalogue.some((ex) => ex.is_custom) && (
-            <optgroup label="Meine Übungen">
-              {catalogue.filter((ex) => ex.is_custom).map((ex) => (
-                <option key={ex.id} value={ex.id}>{ex.name}</option>
-              ))}
-            </optgroup>
-          )}
-          <optgroup label="Katalog">
-            {catalogue.filter((ex) => !ex.is_custom).map((ex) => (
-              <option key={ex.id} value={ex.id}>{ex.name}</option>
-            ))}
-          </optgroup>
-        </select>
-        <button type="submit" className="btn-secondary">{t('workout.addExercise')}</button>
-        <Link
-          href={`/uebungen/neu?returnTo=${encodeURIComponent(`/aktivitaet/training/${workout.id}`)}`}
-          className="btn-ghost self-start px-4 text-sm text-brand"
-        >
-          <PlusCircle size={16} strokeWidth={2} />
-          Eigene Übung erstellen
-        </Link>
-      </form>
+      <AddExerciseCard />
+      </ExerciseActionsProvider>
 
       <div className="fixed left-1/2 z-20 w-full max-w-app -translate-x-1/2 px-4" style={{ bottom: 'calc(5.25rem + env(safe-area-inset-bottom))' }}>
         <div className="flex flex-col gap-2 rounded-2xl border border-white/[0.1] p-2 shadow-lg backdrop-blur-xl" style={{ background: 'linear-gradient(180deg, rgba(31,56,62,0.94), rgba(17,38,43,0.97))' }}>
