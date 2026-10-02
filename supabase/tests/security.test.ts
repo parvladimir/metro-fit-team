@@ -4031,4 +4031,343 @@ describeIntegration('Row Level Security', () => {
       });
     });
   });
+
+  describe('Fewer taps B: favourites, recent exercises and one pinned message (0050)', () => {
+    let P1: typeof userB; // admin of the team
+    let P2: typeof userB; // member of the team
+    let P3: typeof userB; // admin of ANOTHER team
+    let pTeam: string;
+    let otherTeam: string;
+    const ex = { a: '', b: '', teamOnly: '', p2Private: '' };
+    const createdExercises: string[] = [];
+
+    async function createExercise(name: string, extra: Record<string, unknown> = {}) {
+      const { data, error } = await admin.from('exercises').insert({ name, muscle_group: 'chest', exercise_type: 'strength', ...extra }).select('id').single();
+      if (error) throw error;
+      createdExercises.push(data!.id);
+      return data!.id as string;
+    }
+
+    beforeAll(async () => {
+      const { data: t1 } = await admin.from('teams').insert({ name: `Fewer Taps B ${Date.now()}`, slug: `fewer-taps-b-${Date.now()}` }).select('id').single();
+      const { data: t2 } = await admin.from('teams').insert({ name: `Fewer Taps B other ${Date.now()}`, slug: `fewer-taps-b-o-${Date.now()}` }).select('id').single();
+      pTeam = t1!.id;
+      otherTeam = t2!.id;
+      P1 = await createTestUser('fb-admin');
+      P2 = await createTestUser('fb-member');
+      P3 = await createTestUser('fb-other-admin');
+      await admin.from('team_members').insert([
+        { team_id: pTeam, user_id: P1.id, role: 'team_admin' },
+        { team_id: pTeam, user_id: P2.id, role: 'member' },
+        { team_id: otherTeam, user_id: P3.id, role: 'team_admin' },
+      ]);
+      ex.a = await createExercise('FB Übung A');
+      ex.b = await createExercise('FB Übung B');
+      ex.teamOnly = await createExercise('FB Team-Übung', { team_id: pTeam });
+      ex.p2Private = await createExercise('FB P2 privat', { owner_user_id: P2.id, is_custom: true, visibility: 'private', created_by: P2.id });
+    });
+
+    afterEach(async () => {
+      await admin.from('workouts').delete().in('user_id', [P1.id, P2.id]);
+    });
+
+    afterAll(async () => {
+      await admin.from('team_chat_pins').delete().in('team_id', [pTeam, otherTeam]);
+      await admin.from('messages').delete().in('team_id', [pTeam, otherTeam]);
+      for (const u of [P1, P2, P3]) await admin.auth.admin.deleteUser(u.id).catch(() => undefined);
+      await admin.from('exercises').delete().in('id', createdExercises);
+      await admin.from('teams').delete().in('id', [pTeam, otherTeam]);
+    });
+
+    const anon = () => createClient(SUPABASE_URL, ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
+    const favorite = (u: typeof P1, exerciseId: string, userId: string = u.id) => u.client.from('exercise_favorites').insert({ user_id: userId, exercise_id: exerciseId });
+    const favoritesOf = async (userId: string) => ((await admin.from('exercise_favorites').select('exercise_id').eq('user_id', userId)).data ?? []).map((r) => r.exercise_id).sort();
+
+    describe('favourites', () => {
+      it('218. a user keeps a private list: add, read, remove — one favourite per exercise, nobody else can read or touch it', async () => {
+        expect((await favorite(P2, ex.a)).error).toBeNull();
+        expect((await favorite(P2, ex.b)).error).toBeNull();
+        expect((await favorite(P2, ex.a)).error?.code).toBe('23505'); // one favourite per user and exercise
+        expect((await P2.client.from('exercise_favorites').select('exercise_id')).data!.map((r) => r.exercise_id).sort()).toEqual([ex.a, ex.b].sort());
+
+        // Another user (even a team admin) sees nothing and deletes nothing.
+        expect((await P1.client.from('exercise_favorites').select('exercise_id').eq('user_id', P2.id)).data).toEqual([]);
+        await P1.client.from('exercise_favorites').delete().eq('user_id', P2.id);
+        expect(await favoritesOf(P2.id)).toEqual([ex.a, ex.b].sort());
+        // ...and cannot write a favourite onto somebody else's list.
+        expect((await favorite(P1, ex.a, P2.id)).error).not.toBeNull();
+        expect((await anon().from('exercise_favorites').select('exercise_id')).data ?? []).toEqual([]);
+        expect((await anon().from('exercise_favorites').insert({ user_id: P2.id, exercise_id: ex.a })).error).not.toBeNull();
+
+        expect((await P2.client.from('exercise_favorites').delete().eq('exercise_id', ex.a)).error).toBeNull();
+        expect(await favoritesOf(P2.id)).toEqual([ex.b]);
+        await admin.from('exercise_favorites').delete().eq('user_id', P2.id);
+      });
+
+      it('219. only an exercise the user may see can be bookmarked — someone else\'s private exercise and an unknown id are refused', async () => {
+        expect((await favorite(P1, ex.p2Private)).error).not.toBeNull(); // P2's private exercise is invisible to P1
+        expect((await favorite(P1, crypto.randomUUID())).error).not.toBeNull();
+        expect((await favorite(P2, ex.p2Private)).error).toBeNull(); // their own is fine
+        expect((await favorite(P2, ex.teamOnly)).error).toBeNull(); // visible to the team's members
+        expect((await favorite(P3, ex.teamOnly)).error).not.toBeNull(); // not visible to another team's admin
+        expect(await favoritesOf(P1.id)).toEqual([]);
+        await admin.from('exercise_favorites').delete().eq('user_id', P2.id);
+      });
+
+      it('220. a favourite grants nothing: when the exercise stops being visible the row stays but resolves to nothing, and a deleted exercise takes it along', async () => {
+        await favorite(P2, ex.teamOnly);
+        let res = await P2.client.from('exercise_favorites').select('exercise_id, exercises(id, name)');
+        expect(res.data![0]).toMatchObject({ exercise_id: ex.teamOnly, exercises: { id: ex.teamOnly } });
+
+        await admin.from('team_members').delete().eq('team_id', pTeam).eq('user_id', P2.id); // P2 leaves the team
+        res = await P2.client.from('exercise_favorites').select('exercise_id, exercises(id, name)');
+        expect(res.data![0]!.exercise_id).toBe(ex.teamOnly);
+        expect((res.data![0] as { exercises: unknown }).exercises).toBeNull(); // the bookmark no longer opens anything
+        await admin.from('team_members').insert({ team_id: pTeam, user_id: P2.id, role: 'member' });
+
+        const doomed = await createExercise('FB wird gelöscht');
+        await favorite(P2, doomed);
+        await admin.from('exercises').delete().eq('id', doomed);
+        expect(await favoritesOf(P2.id)).toEqual([ex.teamOnly]);
+        await admin.from('exercise_favorites').delete().eq('user_id', P2.id);
+      });
+
+      it('221. a list cannot grow without bound', async () => {
+        const rows = await admin.from('exercises').insert(Array.from({ length: 201 }, (_, i) => ({ name: `FB cap ${i}`, muscle_group: 'chest', exercise_type: 'strength' }))).select('id');
+        const ids = rows.data!.map((r) => r.id as string);
+        createdExercises.push(...ids);
+        const bulk = await admin.from('exercise_favorites').insert(ids.slice(0, 200).map((id) => ({ user_id: P2.id, exercise_id: id })));
+        expect(bulk.error).toBeNull();
+        const over = await favorite(P2, ids[200]!);
+        expect(over.error?.message).toContain('favorite_limit_reached');
+        await admin.from('exercise_favorites').delete().eq('user_id', P2.id);
+      });
+    });
+
+    describe('recently used exercises', () => {
+      async function workout(user: typeof P1, o: { status?: string; daysAgo?: number; rows: Array<{ exerciseId: string; sets?: number }> }) {
+        const status = o.status ?? 'abgeschlossen';
+        const finished = new Date(Date.now() - (o.daysAgo ?? 1) * 86_400_000);
+        const row: Record<string, unknown> = { user_id: user.id, team_id: null, activity_type: 'krafttraining', status, title: 'FB', started_at: new Date(finished.getTime() - 3_600_000).toISOString() };
+        if (status === 'abgeschlossen') {
+          row.finished_at = finished.toISOString();
+          row.duration_seconds = 3600;
+        }
+        const { data: w, error } = await admin.from('workouts').insert(row).select('id').single();
+        if (error) throw error;
+        for (const [i, r] of o.rows.entries()) {
+          const { data: we } = await admin.from('workout_exercises').insert({ workout_id: w!.id, exercise_id: r.exerciseId, position: i }).select('id').single();
+          for (let s = 0; s < (r.sets ?? 0); s++) await admin.from('workout_sets').insert({ workout_exercise_id: we!.id, set_number: s + 1, weight_kg: 50, reps: 10 });
+        }
+        return w!.id as string;
+      }
+      const recent = (u: typeof P1, limit?: number) => u.client.rpc('get_recent_exercises', limit === undefined ? {} : { p_limit: limit });
+
+      it('222. "Zuletzt benutzt" comes from exercises the user really performed — a recorded set — newest first, never from merely adding one', async () => {
+        await workout(P2, { daysAgo: 5, rows: [{ exerciseId: ex.a, sets: 2 }] });
+        await workout(P2, { daysAgo: 2, rows: [{ exerciseId: ex.b, sets: 1 }, { exerciseId: ex.teamOnly, sets: 0 }] }); // teamOnly: added, never performed
+        await workout(P2, { daysAgo: 1, status: 'uebersprungen', rows: [{ exerciseId: ex.p2Private, sets: 3 }] }); // skipped workout
+        await workout(P2, { daysAgo: 400, rows: [{ exerciseId: ex.p2Private, sets: 3 }] }); // long ago
+        const res = await recent(P2);
+        expect(res.error).toBeNull();
+        expect(res.data!.map((r: { out_exercise_id: string }) => r.out_exercise_id)).toEqual([ex.b, ex.a]);
+
+        await workout(P2, { status: 'laeuft', daysAgo: 0, rows: [{ exerciseId: ex.p2Private, sets: 1 }] }); // today's running workout counts once a set exists
+        expect((await recent(P2)).data!.map((r: { out_exercise_id: string }) => r.out_exercise_id)).toEqual([ex.p2Private, ex.b, ex.a]);
+        expect((await recent(P2, 2)).data).toHaveLength(2);
+        expect((await recent(P2, 0)).data).toHaveLength(1); // clamped up
+      });
+
+      it('223. recent exercises are private to their owner, and anonymous callers are refused', async () => {
+        await workout(P2, { rows: [{ exerciseId: ex.a, sets: 1 }] });
+        expect((await recent(P1)).data).toEqual([]); // an admin does not see a member's training
+        expect((await recent(P2)).data).toHaveLength(1);
+        expect((await anon().rpc('get_recent_exercises', {})).error).not.toBeNull();
+      });
+    });
+
+    describe('one pinned message per team', () => {
+      async function message(teamId: string, userId: string, extra: Record<string, unknown> = {}) {
+        const { data, error } = await admin.from('messages').insert({ team_id: teamId, user_id: userId, content: 'Aktuelle Infos zum Wettbewerb', message_type: 'text', ...extra }).select('id').single();
+        if (error) throw error;
+        return data!.id as string;
+      }
+      const pin = (u: typeof P1, id: string, replace?: boolean) => u.client.rpc('pin_team_message', replace === undefined ? { p_message_id: id } : { p_message_id: id, p_replace: replace });
+      const unpin = (u: typeof P1, id: string) => u.client.rpc('unpin_team_message', { p_message_id: id });
+      const pinRow = async (teamId: string) => (await admin.from('team_chat_pins').select('*').eq('team_id', teamId).maybeSingle()).data;
+      const pinnedId = async (teamId: string) => (await pinRow(teamId))?.message_id ?? null;
+      async function clearPin(teamId: string) {
+        await admin.from('team_chat_pins').delete().eq('team_id', teamId);
+      }
+      afterEach(async () => {
+        await clearPin(pTeam);
+        await clearPin(otherTeam);
+      });
+
+      it('224. an admin pins any visible team message; every member can read the pin; nothing else changes — no message, no notification, no unread count', async () => {
+        const m = await message(pTeam, P2.id);
+        const effects = async () => ({
+          messages: (await admin.from('messages').select('id', { count: 'exact', head: true }).eq('team_id', pTeam)).count,
+          notifications: (await admin.from('notifications').select('id', { count: 'exact', head: true })).count,
+          readState: (await admin.from('team_message_read_state').select('user_id', { count: 'exact', head: true }).eq('team_id', pTeam)).count,
+          unread: (await P2.client.rpc('get_unread_chat_count', { p_team_id: pTeam })).data,
+          content: (await admin.from('messages').select('content, edited_at').eq('id', m).single()).data,
+        });
+        const before = await effects();
+
+        const res = await pin(P1, m);
+        expect(res.error).toBeNull();
+        expect(res.data![0]).toEqual({ out_team_id: pTeam, out_changed: true, out_replaced: false });
+        expect(await pinRow(pTeam)).toMatchObject({ team_id: pTeam, message_id: m, pinned_by: P1.id });
+        expect(await effects()).toEqual(before);
+
+        expect((await P2.client.from('team_chat_pins').select('message_id').eq('team_id', pTeam)).data).toEqual([{ message_id: m }]);
+        expect((await P3.client.from('team_chat_pins').select('message_id').eq('team_id', pTeam)).data).toEqual([]); // another team's admin
+        expect((await anon().from('team_chat_pins').select('message_id')).data ?? []).toEqual([]);
+      });
+
+      it('225. a regular member, an admin of another team and an anonymous caller cannot pin — and cannot even tell the message exists', async () => {
+        const m = await message(pTeam, P1.id);
+        const missing = await pin(P2, crypto.randomUUID());
+        for (const attempt of [await pin(P2, m), await pin(P3, m), await pin(P1, crypto.randomUUID())]) expect(attempt.error?.message).toContain('message_not_found');
+        expect(missing.error?.message).toContain('message_not_found'); // the same answer as "not allowed"
+        expect((await anon().rpc('pin_team_message', { p_message_id: m })).error).not.toBeNull();
+        expect(await pinnedId(pTeam)).toBeNull();
+
+        // No client can write the table directly, whatever their role.
+        for (const who of [P1, P2, P3]) {
+          expect((await who.client.from('team_chat_pins').insert({ team_id: pTeam, message_id: m })).error).not.toBeNull();
+        }
+        await admin.from('team_chat_pins').insert({ team_id: pTeam, message_id: m, pinned_by: P1.id, pinned_at: new Date().toISOString() });
+        for (const who of [P1, P2]) {
+          await who.client.from('team_chat_pins').update({ message_id: null }).eq('team_id', pTeam);
+          await who.client.from('team_chat_pins').delete().eq('team_id', pTeam);
+        }
+        expect(await pinnedId(pTeam)).toBe(m);
+      });
+
+      it('226. replacing a pin needs an explicit confirmation, leaves exactly one pin, and pinning the same message again changes nothing', async () => {
+        const m1 = await message(pTeam, P1.id, { content: 'Erste' });
+        const m2 = await message(pTeam, P2.id, { content: 'Zweite' });
+        expect((await pin(P1, m1)).error).toBeNull();
+        const again = await pin(P1, m1);
+        expect(again.data![0]).toMatchObject({ out_changed: false, out_replaced: false });
+
+        const refused = await pin(P1, m2);
+        expect(refused.error?.message).toContain('pin_exists');
+        expect(await pinnedId(pTeam)).toBe(m1);
+
+        const replaced = await pin(P1, m2, true);
+        expect(replaced.data![0]).toMatchObject({ out_changed: true, out_replaced: true });
+        expect(await pinnedId(pTeam)).toBe(m2);
+        expect(((await admin.from('team_chat_pins').select('team_id').eq('team_id', pTeam)).data ?? []).length).toBe(1);
+      });
+
+      it('227. only what people can open in the chat list can be pinned: not a deleted message, an automatic event, an event reply or a withdrawn shared plan; photos and cards are fine', async () => {
+        const deleted = await message(pTeam, P2.id, { deleted_at: new Date().toISOString() });
+        const event = await message(pTeam, P2.id, { message_type: 'system', event_type: 'workout_completed', content: 'hat ein Training abgeschlossen' });
+        const reply = await message(pTeam, P2.id, { parent_message_id: event, content: 'Stark!' });
+        for (const id of [deleted, event, reply]) expect((await pin(P1, id)).error?.message, id).toContain('message_not_pinnable');
+
+        const photo = await message(pTeam, P2.id, { message_type: 'image', content: '', attachment_path: `${pTeam}/${P2.id}/x.jpg` });
+        expect((await pin(P1, photo)).error).toBeNull();
+
+        // a shared plan: pinnable while published, not once withdrawn
+        const { data: tpl } = await admin.from('plan_templates').insert({ user_id: P2.id, name: 'FB Vorlage' }).select('id').single();
+        await admin.from('plan_template_items').insert({ template_id: tpl!.id, exercise_id: ex.a, exercise_name: 'FB Übung A', position: 0, target_sets: 3, target_reps: 10 });
+        const shared = await P2.client.rpc('publish_plan_share', { p_team_id: pTeam, p_source_type: 'template', p_source_template_id: tpl!.id, p_title: 'FB Vorlage' });
+        expect(shared.error).toBeNull();
+        const shareMessage = shared.data![0].message_id as string;
+        const shareId = shared.data![0].share_id as string;
+        expect((await pin(P1, shareMessage, true)).error).toBeNull();
+        expect(await pinnedId(pTeam)).toBe(shareMessage);
+
+        // withdrawing the share takes the pin down in the same moment
+        expect((await P2.client.rpc('withdraw_plan_share', { p_share_id: shareId })).error).toBeNull();
+        expect(await pinnedId(pTeam)).toBeNull();
+        expect((await pin(P1, shareMessage)).error?.message).toContain('message_not_pinnable');
+      });
+
+      it('228. unpinning is admin-only, idempotent, and cannot undo a newer pin from a stale screen', async () => {
+        const m1 = await message(pTeam, P1.id, { content: 'Erste' });
+        const m2 = await message(pTeam, P1.id, { content: 'Zweite' });
+        await pin(P1, m1);
+        expect((await unpin(P2, m1)).error?.message).toContain('message_not_found');
+        expect((await unpin(P3, m1)).error?.message).toContain('message_not_found');
+        expect((await anon().rpc('unpin_team_message', { p_message_id: m1 })).error).not.toBeNull();
+        expect(await pinnedId(pTeam)).toBe(m1);
+
+        await pin(P1, m2, true); // someone replaces the pin
+        expect((await unpin(P1, m1)).data![0]).toEqual({ out_changed: false }); // the stale screen's unpin of the OLD message does nothing
+        expect(await pinnedId(pTeam)).toBe(m2);
+
+        expect((await unpin(P1, m2)).data![0]).toEqual({ out_changed: true });
+        expect(await pinnedId(pTeam)).toBeNull();
+        expect((await unpin(P1, m2)).data![0]).toEqual({ out_changed: false });
+      });
+
+      it('229. the pin goes with its message: a soft delete by the author and a hard delete both clear it', async () => {
+        const m = await message(pTeam, P2.id);
+        await pin(P1, m);
+        const del = await P2.client.from('messages').update({ deleted_at: new Date().toISOString() }).eq('id', m);
+        expect(del.error).toBeNull();
+        expect(await pinnedId(pTeam)).toBeNull();
+
+        const m2 = await message(pTeam, P2.id);
+        await pin(P1, m2);
+        await admin.from('messages').delete().eq('id', m2);
+        expect(await pinnedId(pTeam)).toBeNull();
+        expect((await admin.from('team_chat_pins').select('team_id').eq('team_id', pTeam)).data).toHaveLength(1); // the row stays (so realtime can say "cleared"), now empty
+      });
+
+      it('230. the pin shows the ORIGINAL message: an edit changes what members see, and pinning gives an admin no right to edit it', async () => {
+        const m = await message(pTeam, P2.id, { content: 'Alt' });
+        await pin(P1, m);
+        const attempt = await P1.client.from('messages').update({ content: 'Manipuliert' }).eq('id', m).select('id');
+        expect(attempt.data ?? []).toEqual([]); // not the admin's message: RLS touches no row
+        expect((await admin.from('messages').select('content').eq('id', m).single()).data!.content).toBe('Alt');
+
+        expect((await P2.client.from('messages').update({ content: 'Neu' }).eq('id', m)).error).toBeNull();
+        expect(await pinnedId(pTeam)).toBe(m); // still the same message...
+        const joined = await P1.client.from('team_chat_pins').select('message_id, messages(content)').eq('team_id', pTeam).single();
+        expect((joined.data as unknown as { messages: { content: string } }).messages.content).toBe('Neu'); // ...showing its current text
+      });
+
+      it('231. a team pins independently of every other team, and someone who left the team can no longer read the pin', async () => {
+        const mine = await message(pTeam, P1.id, { content: 'Unsere' });
+        const theirs = await message(otherTeam, P3.id, { content: 'Ihre' });
+        await pin(P1, mine);
+        await pin(P3, theirs);
+        expect(await pinnedId(pTeam)).toBe(mine);
+        expect(await pinnedId(otherTeam)).toBe(theirs);
+        expect((await pin(P1, theirs)).error?.message).toContain('message_not_found'); // not their team's message
+
+        await admin.from('team_members').delete().eq('team_id', pTeam).eq('user_id', P2.id);
+        expect((await P2.client.from('team_chat_pins').select('message_id').eq('team_id', pTeam)).data).toEqual([]);
+        await admin.from('team_members').insert({ team_id: pTeam, user_id: P2.id, role: 'member' });
+        expect((await P2.client.from('team_chat_pins').select('message_id').eq('team_id', pTeam)).data).toEqual([{ message_id: mine }]);
+      });
+
+      it('232. several admins pinning different messages at the same moment: exactly one pin survives and every other admin is told to confirm, never silently overwritten', async () => {
+        const extra: Array<typeof P1> = [];
+        for (const label of ['b', 'c', 'd']) {
+          const u = await createTestUser(`fb-admin-${label}`);
+          await admin.from('team_members').insert({ team_id: pTeam, user_id: u.id, role: 'team_admin' });
+          extra.push(u);
+        }
+        const admins = [P1, ...extra];
+        for (let round = 0; round < 8; round++) {
+          const messages = await Promise.all(admins.map((u, i) => message(pTeam, u.id, { content: `R${round}-${i}` })));
+          const results = await Promise.all(admins.map((u, i) => pin(u, messages[i]!)));
+          expect(results.filter((r) => !r.error)).toHaveLength(1); // exactly one pin was set...
+          expect(results.filter((r) => r.error?.message.includes('pin_exists'))).toHaveLength(admins.length - 1); // ...everyone else was asked to confirm
+          expect(messages).toContain(await pinnedId(pTeam));
+          expect(((await admin.from('team_chat_pins').select('team_id').eq('team_id', pTeam)).data ?? []).length).toBe(1);
+          // Empty the pin but KEEP the row: with the row in place the only thing that serialises the admins is its lock.
+          await admin.from('team_chat_pins').update({ message_id: null, pinned_by: null, pinned_at: null }).eq('team_id', pTeam);
+        }
+        for (const u of extra) await admin.auth.admin.deleteUser(u.id).catch(() => undefined);
+      });
+    });
+  });
 });

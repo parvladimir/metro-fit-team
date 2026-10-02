@@ -104,22 +104,69 @@ export type OlderMessagesResult = {
   invites: Record<string, TrainingInviteForViewer>;
 };
 
-/** Older history for "Ältere Nachrichten laden" (RLS still scopes it to the caller's teams). */
-export async function loadOlderMessagesAction(teamId: string, before: string): Promise<OlderMessagesResult> {
-  const user = await requireAuthUser();
-  if (!/^[0-9a-f-]{36}$/i.test(teamId) || Number.isNaN(Date.parse(before))) {
-    return { messages: [], hasMore: false, mentions: {}, social: {}, reactions: {}, quotes: {}, shares: {}, invites: {} };
-  }
-  const { messages, hasMore } = await getMessagesPage(teamId, { before });
+const EMPTY_PAGE: OlderMessagesResult = { messages: [], hasMore: false, mentions: {}, social: {}, reactions: {}, quotes: {}, shares: {}, invites: {} };
+
+/** Everything the chat list shows around a page of messages (mentions, event replies, reactions, quotes,
+ * plan shares, joint-training cards), read under the caller's own RLS. */
+async function hydratePage(messages: ChatMessage[], hasMore: boolean, userId: string): Promise<OlderMessagesResult> {
   const [mentions, social, reactions, quotes, shares, invites] = await Promise.all([
     getMessageMentions(messages.filter((m) => m.message_type !== 'system').map((m) => m.id)),
     getEventReplies(messages.filter((m) => m.message_type === 'system').map((m) => m.id)),
     getMessageReactions(messages.map((m) => m.id)),
     getQuotes(messages),
-    getPlanSharesForViewer(messages.map((m) => m.id), user.id),
-    getTrainingInvitesForViewer(messages.map((m) => m.id), user.id),
+    getPlanSharesForViewer(messages.map((m) => m.id), userId),
+    getTrainingInvitesForViewer(messages.map((m) => m.id), userId),
   ]);
   return { messages, hasMore, mentions, social, reactions, quotes, shares, invites };
+}
+
+/** Older history for "Ältere Nachrichten laden" (RLS still scopes it to the caller's teams). */
+export async function loadOlderMessagesAction(teamId: string, before: string): Promise<OlderMessagesResult> {
+  const user = await requireAuthUser();
+  if (!/^[0-9a-f-]{36}$/i.test(teamId) || Number.isNaN(Date.parse(before))) return EMPTY_PAGE;
+  const { messages, hasMore } = await getMessagesPage(teamId, { before });
+  return hydratePage(messages, hasMore, user.id);
+}
+
+/** The most messages a single "jump to an old message" request loads (the rest follows in further requests). */
+const JUMP_PAGE_LIMIT = 400;
+
+/**
+ * Loads the history between the oldest message the caller has on screen (`before`) and an OLDER target message, in
+ * one request — what "Ansehen" on a pinned message needs when the message is far back. The target must be a
+ * top-level message of that team that the caller can read (RLS). Nothing newer than `before` is returned and at most
+ * JUMP_PAGE_LIMIT messages come back; `reached` says whether the target is among them.
+ */
+export async function loadMessagesUntilAction(teamId: string, targetId: string, before: string): Promise<OlderMessagesResult & { reached: boolean }> {
+  const user = await requireAuthUser();
+  if (!/^[0-9a-f-]{36}$/i.test(teamId) || !isValidMessageId(targetId) || Number.isNaN(Date.parse(before))) return { ...EMPTY_PAGE, reached: false };
+
+  const supabase = await createClient();
+  const { data: target } = await supabase
+    .from('messages')
+    .select('created_at')
+    .eq('id', targetId)
+    .eq('team_id', teamId)
+    .is('deleted_at', null)
+    .is('parent_message_id', null)
+    .maybeSingle();
+  if (!target) return { ...EMPTY_PAGE, reached: false };
+
+  // How many top-level messages lie between the target (inclusive) and what is already loaded.
+  const { count } = await supabase
+    .from('messages')
+    .select('id', { count: 'exact', head: true })
+    .eq('team_id', teamId)
+    .is('deleted_at', null)
+    .is('parent_message_id', null)
+    .gte('created_at', target.created_at)
+    .lt('created_at', before);
+  const needed = Math.max(1, count ?? 1);
+  const limit = Math.min(needed, JUMP_PAGE_LIMIT);
+
+  const { messages, hasMore } = await getMessagesPage(teamId, { before, limit });
+  const page = await hydratePage(messages, hasMore, user.id);
+  return { ...page, reached: needed <= JUMP_PAGE_LIMIT };
 }
 
 export type SendImageResult = { ok: true } | { ok: false; error: string };

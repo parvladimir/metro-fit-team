@@ -10,12 +10,18 @@ vi.mock('@/app/(app)/aktivitaet/workout-exercise-actions', () => ({
   replaceExerciseAction: (input: unknown) => replaceExerciseAction(input),
   postponeExerciseAction: (input: unknown) => postponeExerciseAction(input),
 }));
+const setExerciseFavoriteAction = vi.fn();
+const addExerciseToWorkoutAction = vi.fn();
+vi.mock('@/app/(app)/aktivitaet/exercise-library-actions', () => ({
+  setExerciseFavoriteAction: (input: unknown) => setExerciseFavoriteAction(input),
+  addExerciseToWorkoutAction: (input: unknown) => addExerciseToWorkoutAction(input),
+}));
 vi.mock('@/app/(app)/aktivitaet/actions', () => ({ addSetAction: vi.fn() }));
 vi.mock('@/components/workout/ExerciseHistorySheet', () => ({ ExerciseHistorySheet: () => null }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 
 import { SetLogger } from '@/components/workout/SetLogger';
-import { ExerciseActionsProvider, ExerciseMenuButton, useExerciseActions, type ExerciseRowInfo } from '@/components/workout/ExerciseActions';
+import { AddExerciseCard, ExerciseActionsProvider, ExerciseMenuButton, useExerciseActions, type ExerciseRowInfo } from '@/components/workout/ExerciseActions';
 import type { PickerExercise } from '@/components/exercises/ExercisePicker';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -59,7 +65,7 @@ function Probe({ id, dirty }: { id: string; dirty: boolean }) {
 function mount(props: { enabled?: boolean; rows?: ExerciseRowInfo[]; dirty?: boolean } = {}) {
   act(() =>
     root.render(
-      <ExerciseActionsProvider userId="user-1" workoutId="workout-1" enabled={props.enabled ?? true} rows={props.rows ?? rows()} catalogue={catalogue}>
+      <ExerciseActionsProvider userId="user-1" workoutId="workout-1" enabled={props.enabled ?? true} rows={props.rows ?? rows()} catalogue={catalogue} favoriteIds={null} recentIds={null}>
         <ExerciseMenuButton workoutExerciseId="we-bench" exerciseName="Bankdrücken" />
         <ExerciseMenuButton workoutExerciseId="we-squat" exerciseName="Kniebeugen" />
         <Probe id="we-bench" dirty={props.dirty ?? false} />
@@ -94,6 +100,8 @@ function pick(name: string) {
 }
 
 beforeEach(() => {
+  setExerciseFavoriteAction.mockReset();
+  addExerciseToWorkoutAction.mockReset();
   storage = new MemoryStorage();
   vi.stubGlobal('localStorage', storage);
   Object.defineProperty(window, 'localStorage', { value: storage, configurable: true });
@@ -264,7 +272,7 @@ describe('replace sheet', () => {
       />
     );
     const tree = (withLogger: boolean) => (
-      <ExerciseActionsProvider userId="user-1" workoutId="workout-1" enabled rows={rows()} catalogue={catalogue}>
+      <ExerciseActionsProvider userId="user-1" workoutId="workout-1" enabled rows={rows()} catalogue={catalogue} favoriteIds={null} recentIds={null}>
         <ExerciseMenuButton workoutExerciseId="we-bench" exerciseName="Bankdrücken" />
         {withLogger ? logger : null}
       </ExerciseActionsProvider>
@@ -294,3 +302,129 @@ describe('replace sheet', () => {
     vi.useRealTimers();
   });
 });
+
+function mountWithLibrary(props: { favoriteIds?: string[] | null; recentIds?: string[] | null } = {}) {
+  act(() =>
+    root.render(
+      <ExerciseActionsProvider
+        userId="user-1"
+        workoutId="workout-1"
+        enabled
+        rows={rows()}
+        catalogue={catalogue}
+        favoriteIds={props.favoriteIds === undefined ? ['ex-bench'] : props.favoriteIds}
+        recentIds={props.recentIds === undefined ? ['ex-squat'] : props.recentIds}
+      >
+        <ExerciseMenuButton workoutExerciseId="we-bench" exerciseName="Bankdrücken" />
+        <AddExerciseCard />
+      </ExerciseActionsProvider>,
+    ),
+  );
+}
+const tabs = () => [...(dialog()?.querySelectorAll('[role="tab"]') ?? [])] as HTMLButtonElement[];
+const star = (name: string) => dialog()!.querySelector(`button[aria-label$="${name}"]`) as HTMLButtonElement | null;
+const openAdd = () => click([...container.querySelectorAll('button')].find((b) => b.textContent?.includes('Übung auswählen')));
+
+describe('adding an exercise with the picker', () => {
+  it('opens the same picker, tells that nothing is logged, and appends the chosen exercise under a request id', async () => {
+    addExerciseToWorkoutAction.mockResolvedValue({ ok: true, workoutExerciseId: 'we-new', replayed: false });
+    mountWithLibrary();
+    openAdd();
+    expect(dialog()?.getAttribute('aria-label')).toBe('Übung hinzufügen');
+    expect(dialog()?.textContent).toContain('Es wird nichts automatisch erfasst.');
+    expect(tabs().map((t) => t.textContent)).toEqual(['Favoriten', 'Zuletzt', 'Alle']);
+    click(tabs()[2]);
+    pick('Kniebeugen');
+    await flush();
+    expect(addExerciseToWorkoutAction).toHaveBeenCalledTimes(1);
+    expect(addExerciseToWorkoutAction.mock.calls[0]![0]).toMatchObject({ workoutId: 'workout-1', exerciseId: 'ex-squat' });
+    expect(String(addExerciseToWorkoutAction.mock.calls[0]![0].requestId)).toMatch(/^[0-9a-f-]{36}$/);
+    expect(dialog()).toBeNull();
+    expect(document.body.textContent).toContain('Kniebeugen wurde am Ende dieses Trainings hinzugefügt.');
+  });
+
+  it('a failed add keeps the sheet open with the reason; retrying the SAME exercise reuses the request id, another exercise gets a new one', async () => {
+    addExerciseToWorkoutAction.mockResolvedValueOnce({ ok: false, error: 'Dieses Training ist bereits beendet.' }).mockResolvedValueOnce({ ok: false, error: 'x' }).mockResolvedValueOnce({ ok: false, error: 'x' });
+    mountWithLibrary({ favoriteIds: null, recentIds: null });
+    openAdd();
+    pick('Kniebeugen');
+    await flush();
+    expect(dialog()?.querySelector('[role="alert"]')?.textContent).toBe('Dieses Training ist bereits beendet.');
+    pick('Kniebeugen');
+    await flush();
+    pick('Mein Klimmzug');
+    await flush();
+    const [a, b, c] = addExerciseToWorkoutAction.mock.calls.map((x) => x[0]);
+    expect(b.requestId).toBe(a.requestId);
+    expect(c.requestId).not.toBe(a.requestId);
+    expect(c.exerciseId).toBe('ex-mine');
+  });
+
+  it('without the favourites table and the recent function the picker is the plain list: no tabs, no stars', () => {
+    mountWithLibrary({ favoriteIds: null, recentIds: null });
+    openAdd();
+    expect(tabs()).toHaveLength(0);
+    expect(dialog()?.querySelector('[aria-pressed]')).toBeNull();
+    expect(dialog()?.querySelectorAll('li').length).toBe(4);
+  });
+});
+
+describe('favourites in the picker', () => {
+  it('a star answers at once and is saved for the account', async () => {
+    setExerciseFavoriteAction.mockResolvedValue({ ok: true });
+    mountWithLibrary();
+    openAdd();
+    click(tabs()[2]);
+    expect(star('Kniebeugen')!.getAttribute('aria-pressed')).toBe('false');
+    click(star('Kniebeugen'));
+    expect(star('Kniebeugen')!.getAttribute('aria-pressed')).toBe('true'); // optimistic, before the server answered
+    await flush();
+    expect(setExerciseFavoriteAction).toHaveBeenCalledWith({ exerciseId: 'ex-squat', favorite: true });
+    expect(star('Kniebeugen')!.getAttribute('aria-pressed')).toBe('true');
+    click(star('Bankdrücken'));
+    expect(setExerciseFavoriteAction).toHaveBeenLastCalledWith({ exerciseId: 'ex-bench', favorite: false });
+  });
+
+  it('a refusal puts the star back and says why', async () => {
+    setExerciseFavoriteAction.mockResolvedValue({ ok: false, error: 'Du hast die maximale Anzahl an Favoriten erreicht.' });
+    mountWithLibrary();
+    openAdd();
+    click(tabs()[2]);
+    click(star('Kniebeugen'));
+    await flush();
+    expect(star('Kniebeugen')!.getAttribute('aria-pressed')).toBe('false');
+    expect(document.body.querySelector('[role="alert"]')?.textContent).toBe('Du hast die maximale Anzahl an Favoriten erreicht.');
+  });
+
+  it('a lost connection puts the star back too', async () => {
+    setExerciseFavoriteAction.mockImplementation(async () => {
+      throw new Error('offline');
+    });
+    mountWithLibrary();
+    openAdd();
+    click(tabs()[2]);
+    click(star('Kniebeugen'));
+    await flush();
+    expect(star('Kniebeugen')!.getAttribute('aria-pressed')).toBe('false');
+    expect(document.body.textContent).toContain('Keine Verbindung. Der Favorit wurde nicht gespeichert.');
+  });
+
+  it('a late failure of an old tap never overrides what the user did since', async () => {
+    let failFirst!: (v: unknown) => void;
+    setExerciseFavoriteAction.mockReturnValueOnce(new Promise((r) => (failFirst = r))).mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({ ok: true });
+    mountWithLibrary();
+    openAdd();
+    click(tabs()[2]);
+    click(star('Kniebeugen')); // on (request 1, slow)
+    click(star('Kniebeugen')); // off again (request 2)
+    click(star('Kniebeugen')); // on again (request 3)
+    await act(async () => {
+      failFirst({ ok: false, error: 'zu spät' });
+      await Promise.resolve();
+    });
+    await flush();
+    expect(star('Kniebeugen')!.getAttribute('aria-pressed')).toBe('true'); // the user's latest choice stands
+    expect(document.body.querySelector('[role="alert"]')).toBeNull();
+  });
+});
+
