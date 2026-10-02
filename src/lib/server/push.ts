@@ -323,3 +323,107 @@ export async function notifyDuelAccepted(params: { duelId: string }): Promise<vo
     text: (who) => `${who} hat dein Duell angenommen.`,
   });
 }
+
+/**
+ * "X lädt zu einem gemeinsamen Training ein." — one push per opted-in
+ * recipient, sent once right after an invitation was newly published (callers
+ * pass it only when the database reported `is_new`). Recipients are the
+ * organizer's CURRENT team mates who switched "Gemeinsame Trainings" on;
+ * the shared gate fails closed for that category and applies quiet hours.
+ * There is deliberately NO regular chat push for the invitation's message:
+ * "Chat-Nachrichten" is on by default for everyone, so a second push would
+ * make the opt-in meaningless. The text carries only the organizer's first
+ * name — never the title, the time, the place or the note. Never throws.
+ */
+export async function notifyTrainingInvitation(params: { inviteId: string }): Promise<void> {
+  if (!isPushConfigured()) return;
+  try {
+    const admin = createAdminClient();
+    const { data: invite } = await admin
+      .from('training_invites')
+      .select('id, message_id, team_id, organizer_id, starts_at, cancelled_at')
+      .eq('id', params.inviteId)
+      .maybeSingle();
+    if (!invite || invite.cancelled_at || new Date(invite.starts_at).getTime() <= Date.now()) return;
+    const { data: message } = await admin.from('messages').select('deleted_at').eq('id', invite.message_id).maybeSingle();
+    if (!message || message.deleted_at) return;
+
+    const { data: members } = await admin.from('team_members').select('user_id').eq('team_id', invite.team_id).neq('user_id', invite.organizer_id);
+    const recipients = await filterPushRecipients((members ?? []).map((m) => m.user_id), 'gemeinsame_trainings');
+    if (recipients.length === 0) return;
+
+    const [{ data: subs }, { data: organizer }] = await Promise.all([
+      admin.from('push_subscriptions').select('id, endpoint, p256dh, auth').in('user_id', recipients),
+      admin.from('profiles').select('full_name').eq('id', invite.organizer_id).single(),
+    ]);
+    if (!subs || subs.length === 0) return;
+
+    ensureVapidConfigured();
+    await deliver(
+      admin,
+      subs as PushSub[],
+      JSON.stringify({
+        title: 'METRO Fit Team',
+        body: `${firstName(organizer?.full_name || 'Jemand')} lädt zu einem gemeinsamen Training ein.`,
+        url: eventDeepLink(invite.message_id),
+        tag: `training-${invite.id}`,
+      })
+    );
+  } catch {
+    // never surface push failures
+  }
+}
+
+/**
+ * ONE push to everyone who answered "Dabei" or "Vielleicht" when the organizer
+ * moves the time/place or cancels — never for any other edit, never to the
+ * actor, and only to opted-in people. Uses the invitation's own tag, so on a
+ * device it REPLACES the earlier invitation notification instead of stacking.
+ * Re-reads the invitation first: a reschedule is only worth sending while the
+ * training is still open and ahead, a cancellation only once it is cancelled.
+ * Never carries the title, time, place or note. Never throws.
+ */
+export async function notifyTrainingChanged(params: { inviteId: string; kind: 'rescheduled' | 'cancelled'; actorId: string }): Promise<void> {
+  if (!isPushConfigured()) return;
+  try {
+    const admin = createAdminClient();
+    const { data: invite } = await admin
+      .from('training_invites')
+      .select('id, message_id, team_id, starts_at, cancelled_at')
+      .eq('id', params.inviteId)
+      .maybeSingle();
+    if (!invite) return;
+    if (params.kind === 'rescheduled' && (invite.cancelled_at || new Date(invite.starts_at).getTime() <= Date.now())) return;
+    if (params.kind === 'cancelled' && !invite.cancelled_at) return;
+
+    const [{ data: answers }, { data: members }] = await Promise.all([
+      admin.from('training_invite_rsvps').select('user_id').eq('invite_id', invite.id).neq('user_id', params.actorId),
+      admin.from('team_members').select('user_id').eq('team_id', invite.team_id),
+    ]);
+    const current = new Set((members ?? []).map((m) => m.user_id));
+    const participants = (answers ?? []).map((a) => a.user_id).filter((id) => current.has(id));
+    const recipients = await filterPushRecipients(participants, 'gemeinsame_trainings');
+    if (recipients.length === 0) return;
+
+    const [{ data: subs }, { data: actor }] = await Promise.all([
+      admin.from('push_subscriptions').select('id, endpoint, p256dh, auth').in('user_id', recipients),
+      admin.from('profiles').select('full_name').eq('id', params.actorId).single(),
+    ]);
+    if (!subs || subs.length === 0) return;
+
+    const who = firstName(actor?.full_name || 'Jemand');
+    ensureVapidConfigured();
+    await deliver(
+      admin,
+      subs as PushSub[],
+      JSON.stringify({
+        title: 'METRO Fit Team',
+        body: params.kind === 'rescheduled' ? `${who} hat Zeit oder Ort eines gemeinsamen Trainings geändert.` : `${who} hat ein gemeinsames Training abgesagt.`,
+        url: eventDeepLink(invite.message_id),
+        tag: `training-${invite.id}`,
+      })
+    );
+  } catch {
+    // never surface push failures
+  }
+}

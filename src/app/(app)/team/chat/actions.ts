@@ -14,6 +14,8 @@ import { stripMarkdown } from '@/lib/chat-format';
 import { fetchCreators } from '@/lib/creator';
 import { getEventReplies, getMessageReactions, getMessageMentions, getMessagesPage, getQuotes, type ChatMessage } from '@/lib/data/chat';
 import { getPlanSharesForViewer, type PlanShareForViewer } from '@/lib/data/plan-shares';
+import { getTrainingInvitesForViewer } from '@/lib/data/training-invites';
+import type { TrainingInviteForViewer } from '@/lib/training-invites';
 import { isReactionKey, type ReactionKey, type ReactionsByUser } from '@/lib/reactions';
 import type { QuoteInfo } from '@/lib/chat-quote';
 import type { EventSocial } from '@/lib/event-social';
@@ -99,23 +101,25 @@ export type OlderMessagesResult = {
   reactions: Record<string, ReactionsByUser>;
   quotes: Record<string, QuoteInfo>;
   shares: Record<string, PlanShareForViewer>;
+  invites: Record<string, TrainingInviteForViewer>;
 };
 
 /** Older history for "Ältere Nachrichten laden" (RLS still scopes it to the caller's teams). */
 export async function loadOlderMessagesAction(teamId: string, before: string): Promise<OlderMessagesResult> {
   const user = await requireAuthUser();
   if (!/^[0-9a-f-]{36}$/i.test(teamId) || Number.isNaN(Date.parse(before))) {
-    return { messages: [], hasMore: false, mentions: {}, social: {}, reactions: {}, quotes: {}, shares: {} };
+    return { messages: [], hasMore: false, mentions: {}, social: {}, reactions: {}, quotes: {}, shares: {}, invites: {} };
   }
   const { messages, hasMore } = await getMessagesPage(teamId, { before });
-  const [mentions, social, reactions, quotes, shares] = await Promise.all([
+  const [mentions, social, reactions, quotes, shares, invites] = await Promise.all([
     getMessageMentions(messages.filter((m) => m.message_type !== 'system').map((m) => m.id)),
     getEventReplies(messages.filter((m) => m.message_type === 'system').map((m) => m.id)),
     getMessageReactions(messages.map((m) => m.id)),
     getQuotes(messages),
     getPlanSharesForViewer(messages.map((m) => m.id), user.id),
+    getTrainingInvitesForViewer(messages.map((m) => m.id), user.id),
   ]);
-  return { messages, hasMore, mentions, social, reactions, quotes, shares };
+  return { messages, hasMore, mentions, social, reactions, quotes, shares, invites };
 }
 
 export type SendImageResult = { ok: true } | { ok: false; error: string };

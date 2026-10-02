@@ -4,6 +4,10 @@
 // instantly and avoids the bare "no internet" browser error page.
 const CACHE_NAME = 'metro-fit-team-shell-v2';
 const SHELL_ASSETS = ['/', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png'];
+// Personal pages (a friendly duel, the joint-training form) are never written
+// to the cache and never answered from it: on a shared device an offline cache
+// would show one person's duel to whoever opens the app next.
+const NEVER_CACHE_PREFIXES = ['/team/duelle', '/team/training'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -26,6 +30,7 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
   if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/auth/')) return;
+  if (NEVER_CACHE_PREFIXES.some((prefix) => url.pathname === prefix || url.pathname.startsWith(`${prefix}/`))) return;
 
   event.respondWith(
     fetch(request)

@@ -2847,5 +2847,401 @@ describeIntegration('Row Level Security', () => {
         expect((await propose(C3, C2.id)).error).toBeNull(); // C3 is no longer held by the departed account's invitation
       });
     });
+
+    describe('training invitations ("Wer ist dabei?")', () => {
+      type Who = typeof userB;
+      const GHOST_ID = '00000000-0000-4000-8000-000000000000';
+      const inHours = (h: number) => new Date(Date.now() + h * 3_600_000).toISOString();
+      const inDays = (d: number) => inHours(d * 24);
+
+      const publishArgs = (over: Record<string, unknown> = {}) => ({
+        p_invite_id: crypto.randomUUID(), p_team_id: cTeamId, p_title: 'Beine & Rücken', p_starts_at: inHours(30),
+        p_activity_type: 'krafttraining', p_place: 'Eingang Studio', p_note: 'Bring ein Handtuch', p_plan_share_id: null, ...over,
+      });
+      const publish = (who: Who, over: Record<string, unknown> = {}) => who.client.rpc('publish_training_invite', publishArgs(over));
+      const updateArgs = (id: string, over: Record<string, unknown> = {}) => ({
+        p_invite_id: id, p_title: 'Beine & Rücken', p_starts_at: inHours(30), p_activity_type: 'krafttraining',
+        p_place: 'Eingang Studio', p_note: 'Bring ein Handtuch', p_plan_share_id: null, ...over,
+      });
+      const rsvp = (who: Who, inviteId: string, status: string | null) => who.client.rpc('set_training_invite_rsvp', { p_invite_id: inviteId, p_status: status });
+      const cancelInvite = (who: Who, inviteId: string) => who.client.rpc('cancel_training_invite', { p_invite_id: inviteId });
+      const expectError = async (p: PromiseLike<{ error: { message: string } | null }>, text: string) => {
+        const r = await p;
+        expect(r.error?.message, text).toContain(text);
+      };
+
+      /** An invitation created by `who`, returning ids; fixed start unless overridden. */
+      const makeInvite = async (who: Who, over: Record<string, unknown> = {}) => {
+        const args = publishArgs(over);
+        const res = await who.client.rpc('publish_training_invite', args);
+        expect(res.error).toBeNull();
+        return { inviteId: args.p_invite_id as string, messageId: res.data![0].out_message_id as string, startsAt: args.p_starts_at as string };
+      };
+      const inviteRow = async (id: string) => (await admin.from('training_invites').select('*').eq('id', id).single()).data!;
+      const rsvpRows = async (id: string) => (await admin.from('training_invite_rsvps').select('user_id, status').eq('invite_id', id)).data ?? [];
+      const messageCount = async () => (await admin.from('messages').select('id', { count: 'exact', head: true }).eq('team_id', cTeamId)).count;
+      const makeShare = async (teamId: string, author: Who, over: Record<string, unknown> = {}) => {
+        const { data: msg } = await admin.from('messages').insert({ team_id: teamId, user_id: author.id, content: 'geteilt', message_type: 'text' }).select('id').single();
+        const { data: share, error } = await admin
+          .from('plan_shares')
+          .insert({ message_id: msg!.id, team_id: teamId, author_id: author.id, source_type: 'template', title: 'Push Day', ...over })
+          .select('id')
+          .single();
+        if (error) throw error;
+        return share!.id as string;
+      };
+
+      beforeEach(async () => {
+        await admin.from('messages').delete().eq('team_id', cTeamId).not('metadata->>training_invite_id', 'is', null);
+        await admin.from('plan_shares').delete().eq('team_id', cTeamId);
+        // Plan-share fixture messages are plain text rows; leave chat history alone otherwise.
+      });
+
+      it('165. publish creates ONE chat message (metadata set from the first INSERT), the invitation and the organizer\'s own "Dabei"', async () => {
+        const before = await messageCount();
+        const startsAt = '2026-12-24T17:00:00.000Z';
+        void startsAt;
+        const when = inHours(30);
+        const args = publishArgs({ p_starts_at: when, p_title: '  Beine & Rücken  ', p_place: '  Eingang Studio ', p_note: '' });
+        const res = await C1.client.rpc('publish_training_invite', args);
+        expect(res.error).toBeNull();
+        expect(res.data![0].is_new).toBe(true);
+
+        const { data: msg } = await admin.from('messages').select('*').eq('id', res.data![0].out_message_id).single();
+        expect(msg).toMatchObject({ team_id: cTeamId, user_id: C1.id, message_type: 'text', deleted_at: null, edited_at: null });
+        expect(msg!.metadata).toEqual({ training_invite_id: args.p_invite_id }); // present immediately — no later UPDATE
+        const berlinDay = new Date(when).toLocaleDateString('de-DE', { timeZone: 'Europe/Berlin', day: '2-digit', month: '2-digit', year: 'numeric' });
+        const berlinTime = new Date(when).toLocaleTimeString('de-DE', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit', hour12: false });
+        expect(msg!.content).toBe(`Gemeinsames Training: Beine & Rücken · ${berlinDay}, ${berlinTime} Uhr`);
+
+        const inv = await inviteRow(args.p_invite_id);
+        expect(inv).toMatchObject({
+          message_id: msg!.id, team_id: cTeamId, organizer_id: C1.id, title: 'Beine & Rücken', activity_type: 'krafttraining',
+          place: 'Eingang Studio', note: null, plan_share_id: null, rsvp_version: 0, cancelled_at: null, edited_at: null,
+        });
+        expect(await rsvpRows(args.p_invite_id)).toEqual([{ user_id: C1.id, status: 'going' }]);
+        expect(await messageCount()).toBe((before ?? 0) + 1);
+      });
+
+      it('166. publish validates and normalizes every field, with a precise error each', async () => {
+        await expectError(publish(C1, { p_title: '' }), 'invalid_title');
+        await expectError(publish(C1, { p_title: '   ' }), 'invalid_title');
+        await expectError(publish(C1, { p_title: 'x'.repeat(81) }), 'invalid_title');
+        await expectError(publish(C1, { p_place: 'x'.repeat(81) }), 'invalid_place');
+        await expectError(publish(C1, { p_note: 'x'.repeat(201) }), 'invalid_note');
+        await expectError(publish(C1, { p_activity_type: 'yoga' }), 'invalid_activity_type');
+        await expectError(publish(C1, { p_starts_at: inHours(-1) }), 'invalid_start_time'); // in the past
+        await expectError(publish(C1, { p_starts_at: null }), 'invalid_start_time');
+        await expectError(publish(C1, { p_starts_at: inDays(91) }), 'invalid_start_time'); // too far ahead
+        await expectError(publish(C1, { p_team_id: outsiderTeamId }), 'not_a_team_member'); // foreign team
+        await expectError(publish(outsider), 'not_a_team_member'); // not a member of this team
+        await expectError(publish(C1, { p_invite_id: null }), 'invalid_request');
+        expect(await messageCount()).toBe(await messageCount()); // nothing half-created:
+        expect((await admin.from('training_invites').select('id').eq('team_id', cTeamId)).data).toEqual([]);
+
+        // Boundary values are fine, and empty optional text is stored as NULL.
+        const ok = await publish(C1, { p_title: 'x'.repeat(80), p_place: 'y'.repeat(80), p_note: 'z'.repeat(200), p_starts_at: inDays(89), p_activity_type: null });
+        expect(ok.error).toBeNull();
+        const blank = await publish(C1, { p_place: '  ', p_note: '', p_activity_type: null });
+        const row = await inviteRow(blank.data![0].out_invite_id);
+        expect(row.place).toBeNull();
+        expect(row.note).toBeNull();
+        expect(row.activity_type).toBeNull();
+      });
+
+      it('167. publishing is idempotent on the invitation id — retries and concurrent double taps make one card; another user cannot reuse the id', async () => {
+        const args = publishArgs();
+        const first = await C1.client.rpc('publish_training_invite', args);
+        const second = await C1.client.rpc('publish_training_invite', args);
+        expect(second.error).toBeNull();
+        expect(second.data![0]).toMatchObject({ out_message_id: first.data![0].out_message_id, out_invite_id: args.p_invite_id, is_new: false });
+        await expectError(C2.client.rpc('publish_training_invite', args), 'invalid_request'); // someone else's id
+        expect((await admin.from('training_invites').select('id').eq('id', args.p_invite_id)).data).toHaveLength(1);
+
+        const burst = publishArgs();
+        const before = await messageCount();
+        const results = await Promise.all(Array.from({ length: 5 }, () => C2.client.rpc('publish_training_invite', burst)));
+        expect(results.every((r) => r.error === null)).toBe(true);
+        expect(results.filter((r) => r.data![0].is_new)).toHaveLength(1);
+        expect(new Set(results.map((r) => r.data![0].out_message_id)).size).toBe(1);
+        expect(await messageCount()).toBe((before ?? 0) + 1);
+      });
+
+      it('168. members can read invitations and answers; outsiders cannot; clients cannot write any of it', async () => {
+        const { inviteId } = await makeInvite(C1);
+        await rsvp(C2, inviteId, 'maybe');
+        for (const who of [C1, C2, C3]) {
+          expect((await who.client.from('training_invites').select('id').eq('id', inviteId)).data).toHaveLength(1);
+          expect((await who.client.from('training_invite_rsvps').select('user_id').eq('invite_id', inviteId)).data).toHaveLength(2);
+        }
+        for (const who of [outsider, userA]) {
+          expect((await who.client.from('training_invites').select('id').eq('id', inviteId)).data ?? []).toEqual([]);
+          expect((await who.client.from('training_invite_rsvps').select('user_id').eq('invite_id', inviteId)).data ?? []).toEqual([]);
+        }
+        const anon = createClient(SUPABASE_URL, ANON_KEY);
+        expect((await anon.from('training_invites').select('id').eq('id', inviteId)).data ?? []).toEqual([]);
+
+        // No client write path of any kind — not even for the organizer or the team admin.
+        const ins = await C3.client.from('training_invites').insert({ id: crypto.randomUUID(), message_id: crypto.randomUUID(), team_id: cTeamId, organizer_id: C3.id, title: 'x', starts_at: inHours(5) });
+        expect(ins.error).not.toBeNull();
+        const forged = await C3.client.from('training_invite_rsvps').insert({ invite_id: inviteId, team_id: cTeamId, user_id: C2.id, status: 'going' });
+        expect(forged.error).not.toBeNull();
+        const selfInsert = await C3.client.from('training_invite_rsvps').insert({ invite_id: inviteId, team_id: cTeamId, user_id: C3.id, status: 'going' });
+        expect(selfInsert.error).not.toBeNull();
+        for (const who of [C1, C2]) {
+          const upd = await who.client.from('training_invites').update({ title: 'gehackt', starts_at: inHours(2) }).eq('id', inviteId).select('id');
+          expect(upd.data ?? []).toEqual([]);
+          const del = await who.client.from('training_invites').delete().eq('id', inviteId).select('id');
+          expect(del.data ?? []).toEqual([]);
+        }
+        const delRsvp = await C1.client.from('training_invite_rsvps').delete().eq('invite_id', inviteId).eq('user_id', C2.id).select('user_id');
+        expect(delRsvp.data ?? []).toEqual([]);
+        expect((await inviteRow(inviteId)).title).toBe('Beine & Rücken');
+        expect(await rsvpRows(inviteId)).toHaveLength(2);
+      });
+
+      it('169. answering: going / maybe / withdraw are changeable and idempotent, and rsvp_version moves only on a real change', async () => {
+        const { inviteId } = await makeInvite(C1);
+        const version = async () => (await inviteRow(inviteId)).rsvp_version as number;
+        const v0 = await version();
+
+        expect((await rsvp(C2, inviteId, 'going')).data).toBe('going');
+        expect(await version()).toBe(v0 + 1);
+        expect((await rsvp(C2, inviteId, 'going')).data).toBe('going'); // retry: nothing changes
+        expect(await version()).toBe(v0 + 1);
+        expect((await rsvp(C2, inviteId, 'maybe')).data).toBe('maybe');
+        expect(await version()).toBe(v0 + 2);
+        expect((await rsvp(C2, inviteId, null)).data).toBeNull(); // withdraw
+        expect(await version()).toBe(v0 + 3);
+        expect((await rsvp(C2, inviteId, null)).error).toBeNull(); // withdrawing again is a quiet no-op
+        expect(await version()).toBe(v0 + 3);
+        await expectError(rsvp(C2, inviteId, 'definitely'), 'invalid_status');
+        expect(await rsvpRows(inviteId)).toEqual([{ user_id: C1.id, status: 'going' }]);
+
+        // One row per person: changing never duplicates.
+        await rsvp(C3, inviteId, 'maybe');
+        await rsvp(C3, inviteId, 'going');
+        expect((await rsvpRows(inviteId)).filter((r) => r.user_id === C3.id)).toEqual([{ user_id: C3.id, status: 'going' }]);
+      });
+
+      it('170. concurrent identical answers leave one row and bump the version exactly once', async () => {
+        const { inviteId } = await makeInvite(C1);
+        const v0 = (await inviteRow(inviteId)).rsvp_version as number;
+        const results = await Promise.all(Array.from({ length: 6 }, () => rsvp(C2, inviteId, 'going')));
+        expect(results.every((r) => r.error === null)).toBe(true);
+        expect((await rsvpRows(inviteId)).filter((r) => r.user_id === C2.id)).toHaveLength(1);
+        expect((await inviteRow(inviteId)).rsvp_version).toBe(v0 + 1);
+      });
+
+      it('171. answering is refused for an unknown or foreign invitation, a cancelled one, one that has started and one whose message was deleted', async () => {
+        const { inviteId, messageId } = await makeInvite(C1);
+        await expectError(rsvp(C2, GHOST_ID, 'going'), 'invite_not_found');
+        await expectError(rsvp(outsider, inviteId, 'going'), 'invite_not_found'); // another team: same answer as "does not exist"
+
+        await admin.from('training_invites').update({ starts_at: inHours(-1) }).eq('id', inviteId);
+        await expectError(rsvp(C2, inviteId, 'going'), 'invite_started');
+        await admin.from('training_invites').update({ starts_at: inHours(30) }).eq('id', inviteId);
+
+        await admin.from('messages').update({ deleted_at: new Date().toISOString() }).eq('id', messageId);
+        await expectError(rsvp(C2, inviteId, 'going'), 'invite_closed'); // a deleted message closes its invitation
+        await admin.from('messages').update({ deleted_at: null }).eq('id', messageId);
+
+        await cancelInvite(C1, inviteId);
+        await expectError(rsvp(C2, inviteId, 'going'), 'invite_closed');
+        await expectError(rsvp(C2, inviteId, null), 'invite_closed');
+      });
+
+      it('172. an answer is not a workout: no workout, points, feed item, chat message, notification or mission progress, and no unread change', async () => {
+        const { inviteId } = await makeInvite(C1);
+        const ids = [C1.id, C2.id, C3.id];
+        const snapshot = async () => ({
+          workouts: (await admin.from('workouts').select('id', { count: 'exact', head: true }).in('user_id', ids)).count,
+          score: (await admin.from('fitness_score_events').select('id', { count: 'exact', head: true }).in('user_id', ids)).count,
+          messages: await messageCount(),
+          notifications: (await admin.from('notifications').select('id', { count: 'exact', head: true }).in('user_id', ids)).count,
+          feed: (await admin.from('activity_feed').select('id', { count: 'exact', head: true }).eq('team_id', cTeamId)).count,
+          audit: (await admin.from('audit_events').select('id', { count: 'exact', head: true }).eq('team_id', cTeamId)).count,
+          mission: Number((await C1.client.rpc('get_team_mission_training_days', { p_team_id: cTeamId, p_start_date: '2020-01-01', p_end_date: '2040-01-01' })).data),
+        });
+        const before = await snapshot();
+        await rsvp(C2, inviteId, 'going');
+        await rsvp(C3, inviteId, 'maybe');
+        await rsvp(C2, inviteId, 'maybe');
+        await rsvp(C3, inviteId, null);
+        expect(await snapshot()).toEqual(before);
+      });
+
+      it('173. the organizer can edit: only a changed time or place is "substantial"; an identical re-submit writes nothing; answers are kept', async () => {
+        const { inviteId, messageId, startsAt } = await makeInvite(C2);
+        await rsvp(C3, inviteId, 'going');
+
+        // Title only: changed, but not worth a notification — and the message is NOT marked edited.
+        const t1 = await C2.client.rpc('update_training_invite', updateArgs(inviteId, { p_title: 'Beine & Rücken & Core', p_starts_at: startsAt }));
+        expect(t1.error).toBeNull();
+        expect(t1.data![0]).toMatchObject({ changed: true, substantial: false, out_message_id: messageId });
+        const msg1 = (await admin.from('messages').select('content, edited_at').eq('id', messageId).single()).data!;
+        expect(msg1.content).toContain('Beine & Rücken & Core');
+        expect(msg1.edited_at).toBeNull();
+        expect((await inviteRow(inviteId)).edited_at).not.toBeNull();
+
+        // Note / type / template link only: still not substantial.
+        const t2 = await C2.client.rpc('update_training_invite', updateArgs(inviteId, { p_title: 'Beine & Rücken & Core', p_starts_at: startsAt, p_note: 'Neu', p_activity_type: 'cardio' }));
+        expect(t2.data![0]).toMatchObject({ changed: true, substantial: false });
+
+        // Identical re-submit: nothing written at all.
+        const editedAt = (await inviteRow(inviteId)).edited_at;
+        const same = await C2.client.rpc('update_training_invite', updateArgs(inviteId, { p_title: 'Beine & Rücken & Core', p_starts_at: startsAt, p_note: 'Neu', p_activity_type: 'cardio' }));
+        expect(same.data![0]).toMatchObject({ changed: false, substantial: false });
+        expect((await inviteRow(inviteId)).edited_at).toBe(editedAt);
+
+        // Time or place: substantial.
+        const later = inHours(50);
+        const time = await C2.client.rpc('update_training_invite', updateArgs(inviteId, { p_title: 'Beine & Rücken & Core', p_starts_at: later, p_note: 'Neu', p_activity_type: 'cardio' }));
+        expect(time.data![0]).toMatchObject({ changed: true, substantial: true });
+        const place = await C2.client.rpc('update_training_invite', updateArgs(inviteId, { p_title: 'Beine & Rücken & Core', p_starts_at: later, p_note: 'Neu', p_activity_type: 'cardio', p_place: 'Parkplatz' }));
+        expect(place.data![0]).toMatchObject({ changed: true, substantial: true });
+
+        expect(await rsvpRows(inviteId)).toEqual(expect.arrayContaining([{ user_id: C3.id, status: 'going' }, { user_id: C2.id, status: 'going' }]));
+        expect(await messageCount()).toBe(await messageCount());
+      });
+
+      it('174. only the organizer may edit or cancel — not another member, not even the team admin — and not once it is closed or has started', async () => {
+        const { inviteId } = await makeInvite(C2);
+        for (const who of [C1, C3, outsider]) {
+          await expectError(who.client.rpc('update_training_invite', updateArgs(inviteId, { p_title: 'Hijack' })), 'invite_not_found');
+          await expectError(cancelInvite(who, inviteId), 'invite_not_found');
+        }
+        await expectError(C2.client.rpc('update_training_invite', updateArgs(GHOST_ID)), 'invite_not_found');
+        await expectError(C2.client.rpc('update_training_invite', updateArgs(inviteId, { p_starts_at: inHours(-2) })), 'invalid_start_time');
+        await expectError(C2.client.rpc('update_training_invite', updateArgs(inviteId, { p_title: '' })), 'invalid_title');
+        expect((await inviteRow(inviteId)).title).toBe('Beine & Rücken');
+
+        await admin.from('training_invites').update({ starts_at: inHours(-1) }).eq('id', inviteId);
+        await expectError(C2.client.rpc('update_training_invite', updateArgs(inviteId)), 'invite_started');
+        await admin.from('training_invites').update({ starts_at: inHours(30) }).eq('id', inviteId);
+
+        await cancelInvite(C2, inviteId);
+        await expectError(C2.client.rpc('update_training_invite', updateArgs(inviteId)), 'invite_closed');
+      });
+
+      it('175. cancelling is idempotent, reports whether it was still upcoming, and is final', async () => {
+        const { inviteId } = await makeInvite(C2);
+        const first = await cancelInvite(C2, inviteId);
+        expect(first.data![0]).toMatchObject({ newly_cancelled: true, was_upcoming: true });
+        expect((await cancelInvite(C2, inviteId)).data![0]).toMatchObject({ newly_cancelled: false });
+        expect((await inviteRow(inviteId)).cancelled_at).not.toBeNull();
+        const undo = await admin.from('training_invites').update({ cancelled_at: null }).eq('id', inviteId);
+        expect(undo.error?.message).toContain('invite_cancellation_is_final');
+
+        // Cancelling something that already started: allowed, but not "upcoming" (no push is warranted).
+        const started = await makeInvite(C2);
+        await admin.from('training_invites').update({ starts_at: inHours(-1) }).eq('id', started.inviteId);
+        expect((await cancelInvite(C2, started.inviteId)).data![0]).toMatchObject({ newly_cancelled: true, was_upcoming: false });
+      });
+
+      it('176. an invitation\'s identity is frozen — message, team and organizer can never be moved, even by the service role', async () => {
+        const a = await makeInvite(C2);
+        const b = await makeInvite(C3);
+        expect((await admin.from('training_invites').update({ message_id: b.messageId }).eq('id', a.inviteId)).error?.message).toContain('invite_identity_is_frozen');
+        expect((await admin.from('training_invites').update({ organizer_id: C3.id }).eq('id', a.inviteId)).error?.message).toContain('invite_identity_is_frozen');
+        expect((await admin.from('training_invites').update({ team_id: outsiderTeamId }).eq('id', a.inviteId)).error?.message).toContain('invite_identity_is_frozen');
+      });
+
+      it('177. a member who leaves disappears from the participant list and loses access; rejoining restores their answer', async () => {
+        const { inviteId } = await makeInvite(C1);
+        await rsvp(C3, inviteId, 'going');
+        const visible = async (who: Who) => ((await who.client.from('training_invite_rsvps').select('user_id').eq('invite_id', inviteId)).data ?? []).map((r) => r.user_id).sort();
+        expect(await visible(C2)).toEqual([C1.id, C3.id].sort());
+
+        await admin.from('team_members').delete().eq('team_id', cTeamId).eq('user_id', C3.id);
+        expect(await visible(C2)).toEqual([C1.id]); // no ghost participant
+        expect((await C3.client.from('training_invites').select('id').eq('id', inviteId)).data ?? []).toEqual([]);
+        await expectError(rsvp(C3, inviteId, 'maybe'), 'invite_not_found');
+
+        await admin.from('team_members').insert({ team_id: cTeamId, user_id: C3.id, role: 'member' });
+        expect(await visible(C2)).toEqual([C1.id, C3.id].sort());
+      });
+
+      it('178. a linked template must be a live share of this team; withdrawing or deleting it never breaks the invitation', async () => {
+        const live = await makeShare(cTeamId, C1);
+        const foreign = await makeShare(outsiderTeamId, outsider);
+        const withdrawn = await makeShare(cTeamId, C1, { withdrawn_at: new Date().toISOString() });
+        await expectError(publish(C1, { p_plan_share_id: foreign }), 'invalid_plan_share');
+        await expectError(publish(C1, { p_plan_share_id: withdrawn }), 'invalid_plan_share');
+        await expectError(publish(C1, { p_plan_share_id: GHOST_ID }), 'invalid_plan_share');
+
+        const { inviteId } = await makeInvite(C1, { p_plan_share_id: live });
+        expect((await inviteRow(inviteId)).plan_share_id).toBe(live);
+        await expectError(C1.client.rpc('update_training_invite', updateArgs(inviteId, { p_plan_share_id: foreign })), 'invalid_plan_share');
+
+        await admin.from('plan_shares').update({ withdrawn_at: new Date().toISOString() }).eq('id', live);
+        expect((await inviteRow(inviteId)).plan_share_id).toBe(live); // link kept; the card just stops offering it
+        await admin.from('plan_shares').delete().eq('id', live);
+        expect((await inviteRow(inviteId)).plan_share_id).toBeNull();
+        expect((await inviteRow(inviteId)).title).toBe('Beine & Rücken');
+      });
+
+      it('179. answers cannot name another team, and deleting the message, the invitation or an account cleans up completely', async () => {
+        const { inviteId, messageId } = await makeInvite(C1);
+        const mismatched = await admin.from('training_invite_rsvps').insert({ invite_id: inviteId, team_id: outsiderTeamId, user_id: C2.id, status: 'going' });
+        expect(mismatched.error).not.toBeNull(); // composite FK (invite_id, team_id)
+
+        await rsvp(C2, inviteId, 'going');
+        await admin.from('messages').delete().eq('id', messageId);
+        expect((await admin.from('training_invites').select('id').eq('id', inviteId)).data).toEqual([]);
+        expect(await rsvpRows(inviteId)).toEqual([]);
+
+        const X = await createTestUser('c-organizer');
+        await admin.from('team_members').insert({ team_id: cTeamId, user_id: X.id, role: 'member' });
+        const mine = await makeInvite(X);
+        await rsvp(C2, mine.inviteId, 'maybe');
+        expect((await admin.auth.admin.deleteUser(X.id)).error).toBeNull();
+        expect((await admin.from('training_invites').select('id').eq('id', mine.inviteId)).data).toEqual([]);
+        expect((await admin.from('messages').select('id').eq('id', mine.messageId)).data).toEqual([]);
+        expect(await rsvpRows(mine.inviteId)).toEqual([]);
+      });
+
+      it('180. the functions are not callable anonymously, and the internal helpers are not callable by clients at all', async () => {
+        const anon = createClient(SUPABASE_URL, ANON_KEY);
+        const calls: [string, Record<string, unknown>][] = [
+          ['publish_training_invite', publishArgs()],
+          ['update_training_invite', updateArgs(GHOST_ID)],
+          ['cancel_training_invite', { p_invite_id: GHOST_ID }],
+          ['set_training_invite_rsvp', { p_invite_id: GHOST_ID, p_status: 'going' }],
+        ];
+        for (const [fn, args] of calls) expect((await anon.rpc(fn, args)).error, fn).not.toBeNull();
+        expect((await C1.client.rpc('normalize_training_invite_fields', { p_title: 'x', p_starts_at: inHours(5), p_activity_type: null, p_place: null, p_note: null, p_plan_share_id: null, p_team_id: cTeamId })).error).not.toBeNull();
+        expect((await C1.client.rpc('training_invite_message_text', { p_title: 'x', p_starts_at: inHours(5) })).error).not.toBeNull();
+      });
+
+      it('181. publish adds exactly one chat message; answering, editing and cancelling add none', async () => {
+        const base = await messageCount();
+        const { inviteId, startsAt } = await makeInvite(C2);
+        expect(await messageCount()).toBe((base ?? 0) + 1);
+        await rsvp(C3, inviteId, 'going');
+        await rsvp(C3, inviteId, null);
+        await C2.client.rpc('update_training_invite', updateArgs(inviteId, { p_title: 'Neu', p_starts_at: startsAt }));
+        await cancelInvite(C2, inviteId);
+        expect(await messageCount()).toBe((base ?? 0) + 1);
+      });
+
+      it('182. the chat sentence shows the Berlin calendar day and time, not UTC (checked just after and just before Berlin midnight)', async () => {
+        const berlinParts = (iso: string) => ({
+          day: new Date(iso).toLocaleDateString('de-DE', { timeZone: 'Europe/Berlin', day: '2-digit', month: '2-digit', year: 'numeric' }),
+          time: new Date(iso).toLocaleTimeString('de-DE', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit', hour12: false }),
+        });
+        // The next two instants whose Berlin wall clock reads 00:30 and 23:30, a few days out.
+        const target = new Date(Date.now() + 3 * 86_400_000);
+        const key = target.toLocaleDateString('sv-SE', { timeZone: 'Europe/Berlin' });
+        for (const hhmm of ['00:30', '23:30']) {
+          const instant = localDateTimeToUtc(`${key}T${hhmm}`)!.toISOString();
+          const { messageId } = await makeInvite(C1, { p_starts_at: instant, p_title: `Mitternacht ${hhmm}` });
+          const { data: msg } = await admin.from('messages').select('content').eq('id', messageId).single();
+          const { day, time } = berlinParts(instant);
+          expect(msg!.content).toBe(`Gemeinsames Training: Mitternacht ${hhmm} · ${day}, ${time} Uhr`);
+          expect(time).toBe(hhmm);
+        }
+      });
+    });
   });
 });

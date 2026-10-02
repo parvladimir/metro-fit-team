@@ -394,6 +394,33 @@ export interface TeamDuel {
   updated_at: string;
 }
 
+export interface TrainingInvite {
+  id: string;
+  message_id: string;
+  team_id: string;
+  organizer_id: string;
+  title: string;
+  starts_at: string;
+  activity_type: string | null;
+  place: string | null;
+  note: string | null;
+  plan_share_id: string | null;
+  /** Bumped on every real change to an answer — the realtime signal that also covers removals. */
+  rsvp_version: number;
+  cancelled_at: string | null;
+  edited_at: string | null;
+  created_at: string;
+}
+
+export interface TrainingInviteRsvp {
+  invite_id: string;
+  team_id: string;
+  user_id: string;
+  status: 'going' | 'maybe';
+  created_at: string;
+  updated_at: string;
+}
+
 export interface PersonalWeeklyRecap {
   id: string;
   user_id: string;

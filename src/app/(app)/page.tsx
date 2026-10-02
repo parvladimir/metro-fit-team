@@ -7,11 +7,14 @@ import { getMessageReactions } from '@/lib/data/chat';
 import { getCurrentTeamMission, type TeamMissionWithProgress } from '@/lib/data/team-missions';
 import { ensureWeeklyRecapGenerated, type WeeklyRecapResult } from '@/lib/data/weekly-recap';
 import { getDuelsForViewer } from '@/lib/data/duels';
+import { getUpcomingTrainingInvite } from '@/lib/data/training-invites';
+import type { TrainingInviteForViewer } from '@/lib/training-invites';
 import { pickHomeDuel, type DuelView } from '@/lib/duels';
 import { CoachHeader } from '@/components/dashboard/CoachHeader';
 import { TeamActivityCard } from '@/components/dashboard/TeamActivityCard';
 import { TeamMissionCard } from '@/components/dashboard/TeamMissionCard';
 import { DuelHomeCard } from '@/components/dashboard/DuelHomeCard';
+import { UpcomingTrainingCard } from '@/components/dashboard/UpcomingTrainingCard';
 import { WeeklyRecapTeaser } from '@/components/dashboard/WeeklyRecapTeaser';
 import { NearbyRankCard } from '@/components/dashboard/NearbyRankCard';
 import { berlinWallClock, type CoachInput } from '@/lib/coach';
@@ -40,12 +43,13 @@ export default async function DashboardPage() {
   // last week's recap are all independent of each other, so they run in
   // parallel; each non-essential piece falls back to an empty/absent state
   // rather than breaking the whole page on its own failure.
-  const [coach, activityReactions, mission, weeklyRecap, duels]: [
+  const [coach, activityReactions, mission, weeklyRecap, duels, upcomingInvite]: [
     Omit<CoachInput, 'firstName' | 'weekly'>,
     Awaited<ReturnType<typeof getMessageReactions>>,
     TeamMissionWithProgress | null,
     WeeklyRecapResult,
     DuelView[],
+    TrainingInviteForViewer | null,
   ] = await Promise.all([
     getCoachData(profile, membership?.team_id ?? null, data).catch(() => ({
       totalWorkouts: 1,
@@ -64,6 +68,7 @@ export default async function DashboardPage() {
     membership?.team_id ? getCurrentTeamMission(membership.team_id).catch(() => null) : Promise.resolve(null),
     ensureWeeklyRecapGenerated(profile, membership?.team_id ?? null).catch(() => ({ personal: null, team: null })),
     membership?.team_id ? getDuelsForViewer(profile.id).catch(() => []) : Promise.resolve([]),
+    membership?.team_id ? getUpcomingTrainingInvite(membership.team_id, profile.id).catch(() => null) : Promise.resolve(null),
   ]);
   const now = new Date();
   const homeDuel = pickHomeDuel(duels, now);
@@ -133,6 +138,8 @@ export default async function DashboardPage() {
       <TeamMissionCard mission={mission} />
 
       <DuelHomeCard duel={homeDuel} now={now} />
+
+      <UpcomingTrainingCard invite={upcomingInvite} />
 
       <div className="grid grid-cols-2 gap-3">
         <NearbyRankCard data={data.nearbyRanking} />

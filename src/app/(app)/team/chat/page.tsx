@@ -1,8 +1,10 @@
-import { MessageCircle } from 'lucide-react';
+import Link from 'next/link';
+import { CalendarPlus, MessageCircle } from 'lucide-react';
 import { BackLink } from '@/components/ui/BackLink';
 import { requireAuthUser, getPrimaryTeamMembership } from '@/lib/data/profile';
 import { getMessagesPage, getChatLastReadAt, getEventReplies, getMessageReactions, getMentionMembers, getMessageMentions, getQuotes } from '@/lib/data/chat';
 import { getPlanSharesForViewer } from '@/lib/data/plan-shares';
+import { getTrainingInvitesForViewer } from '@/lib/data/training-invites';
 import { getTemplates } from '@/lib/data/plan-templates';
 import { isValidMessageId } from '@/lib/event-social';
 import { ChatRoom } from '@/components/chat/ChatRoom';
@@ -28,13 +30,14 @@ export default async function ChatPage({ searchParams }: { searchParams: Promise
     getChatLastReadAt(membership.team_id, user.id),
   ]);
 
-  const [social, reactions, members, mentions, quotes, shares, myTemplates] = await Promise.all([
+  const [social, reactions, members, mentions, quotes, shares, invites, myTemplates] = await Promise.all([
     getEventReplies(messages.filter((m) => m.message_type === 'system').map((m) => m.id)),
     getMessageReactions(messages.map((m) => m.id)),
     getMentionMembers(membership.team_id, user.id),
     getMessageMentions(messages.filter((m) => m.message_type !== 'system').map((m) => m.id)),
     getQuotes(messages),
     getPlanSharesForViewer(messages.map((m) => m.id), user.id),
+    getTrainingInvitesForViewer(messages.map((m) => m.id), user.id),
     getTemplates(user.id),
   ]);
 
@@ -46,7 +49,14 @@ export default async function ChatPage({ searchParams }: { searchParams: Promise
         style={{ paddingTop: 'max(1rem, calc(env(safe-area-inset-top) + 1rem))' }}
       >
         <BackLink href="/team" />
-        <h1 className="min-w-0 truncate text-lg font-bold text-neutral-900">{membership.team_name}</h1>
+        <h1 className="min-w-0 flex-1 truncate text-lg font-bold text-neutral-900">{membership.team_name}</h1>
+        <Link
+          href="/team/training/neu"
+          aria-label="Gemeinsames Training planen"
+          className="btn-icon h-11 w-11 shrink-0 border border-white/[0.08] bg-surface-3 text-neutral-600"
+        >
+          <CalendarPlus size={20} strokeWidth={1.9} />
+        </Link>
       </div>
       <ChatPushPrompt />
       <ChatRoom
@@ -61,6 +71,7 @@ export default async function ChatPage({ searchParams }: { searchParams: Promise
         initialHasMore={hasMore}
         initialQuotes={quotes}
         initialShares={shares}
+        initialInvites={invites}
         myTemplates={myTemplates}
         focusMessageId={isValidMessageId(message) ? message : null}
       />
