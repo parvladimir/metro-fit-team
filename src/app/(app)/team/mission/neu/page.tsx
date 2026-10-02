@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { BackLink } from '@/components/ui/BackLink';
 import { requireAuthUser, getPrimaryTeamMembership } from '@/lib/data/profile';
+import { addDaysToKey, localDayKey } from '@/lib/date';
 import { createMissionAction } from '../actions';
 
 export default async function NeueWochenmissionPage() {
@@ -8,8 +9,10 @@ export default async function NeueWochenmissionPage() {
   const membership = await getPrimaryTeamMembership(user.id);
   if (!membership || membership.role !== 'team_admin') redirect('/team/mission');
 
-  const today = new Date().toISOString().slice(0, 10);
-  const inOneWeek = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  // Berlin calendar dates (see getCurrentTeamMission) — a UTC date here would
+  // pre-fill "yesterday" as the start between 00:00 and 02:00 local time.
+  const today = localDayKey(new Date());
+  const inOneWeek = addDaysToKey(today, 7);
 
   return (
     <div className="screen-padding flex flex-col gap-5 pb-8">

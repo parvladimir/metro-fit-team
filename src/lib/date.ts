@@ -110,7 +110,9 @@ export function localDateTimeToUtc(value: string, timeZone: string = APP_TIMEZON
   return new Date(guess.getTime() - offsetMinutes * 60000);
 }
 
-function addDaysToKey(dayKey: string, days: number): string {
+/** Calendar-date arithmetic on a YYYY-MM-DD key (pure date math, no time zone
+ * involved — adding days to a date key is the same in every zone). */
+export function addDaysToKey(dayKey: string, days: number): string {
   const [y, m, d] = dayKey.split('-').map(Number);
   return new Date(Date.UTC(y!, m! - 1, d! + days)).toISOString().slice(0, 10);
 }

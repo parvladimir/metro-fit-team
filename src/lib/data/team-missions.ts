@@ -1,5 +1,6 @@
 import 'server-only';
 import { createClient } from '@/lib/supabase/server';
+import { localDayKey } from '@/lib/date';
 import type { TeamMission } from '@/types/database';
 
 export interface TeamMissionWithProgress extends TeamMission {
@@ -21,7 +22,10 @@ const CELEBRATION_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
  * the next call, with no separate recompute step. */
 export async function getCurrentTeamMission(teamId: string, now: Date = new Date()): Promise<TeamMissionWithProgress | null> {
   const supabase = await createClient();
-  const today = now.toISOString().slice(0, 10);
+  // The Berlin calendar day, not the UTC one: mission start/end dates are team
+  // calendar dates, and between 00:00 and 02:00 Berlin time the UTC date is
+  // still "yesterday", which showed a mission a day late / a day too long.
+  const today = localDayKey(now);
 
   const { data: mission } = await supabase
     .from('team_missions')
