@@ -15,11 +15,13 @@ import { needsGentleReminder } from '@/lib/workout-timer';
  * opens the normal review screen with blank/frozen defaults for the user to
  * fill in themselves. */
 export function StaleSessionBanner({
+  userId,
   workoutId,
   startedAt,
   pausedSeconds,
   pausedAt,
 }: {
+  userId?: string;
   workoutId: string;
   startedAt: string;
   pausedSeconds: number;
@@ -57,7 +59,7 @@ export function StaleSessionBanner({
         <button type="button" disabled={pending} onClick={correctAndFinish} className="btn-secondary w-full text-sm">
           Schon beendet – Zeit korrigieren
         </button>
-        <DiscardWorkoutButton workoutId={workoutId} label="Nur getestet – verwerfen" className="btn-ghost w-full text-sm text-red-400" />
+        <DiscardWorkoutButton workoutId={workoutId} userId={userId} label="Nur getestet – verwerfen" className="btn-ghost w-full text-sm text-red-400" />
       </div>
     </div>
   );

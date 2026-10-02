@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server';
 import { requireAuthUser } from '@/lib/data/profile';
 import { updateNotificationPreferencesAction, deleteAccountAction } from '../actions';
 import { ConfirmSubmitButton } from '@/components/ui/ConfirmSubmitButton';
+import { SignOutForm } from '@/components/workout/DraftHousekeeping';
 import { t } from '@/lib/i18n';
 import { DEFAULT_ON_CATEGORIES, OPT_IN_CATEGORIES } from '@/lib/notification-gating';
 import type { NotificationPreferences } from '@/types/database';
@@ -92,11 +93,11 @@ export default async function EinstellungenPage() {
 
       <section className="flex flex-col gap-2">
         <p className="section-title text-red-500">{t('profile.deleteAccount')}</p>
-        <form action={deleteAccountAction}>
+        <SignOutForm userId={user.id} action={deleteAccountAction}>
           <ConfirmSubmitButton className="btn-destructive w-full" confirmMessage={t('profile.deleteAccount.confirm')}>
             {t('profile.deleteAccount')}
           </ConfirmSubmitButton>
-        </form>
+        </SignOutForm>
       </section>
     </div>
   );

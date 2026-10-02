@@ -3,16 +3,20 @@
 import { useState, useTransition } from 'react';
 import { Trash2, X } from 'lucide-react';
 import { discardWorkoutAction } from '@/app/(app)/aktivitaet/actions';
+import { clearDraftsForWorkout, unmarkWorkoutEnded } from '@/lib/workout-drafts';
 
 /** "Training verwerfen?" confirmation before discarding a running/paused
  * workout — mirrors WorkoutActionsMenu's own two-step delete confirmation.
  * Never completes silently: a discard always needs this explicit step. */
 export function DiscardWorkoutButton({
   workoutId,
+  userId,
   className,
   label = 'Verwerfen',
 }: {
   workoutId: string;
+  /** Lets the on-device set drafts of this workout be dropped with it. */
+  userId?: string;
   className?: string;
   label?: string;
 }) {
@@ -22,10 +26,13 @@ export function DiscardWorkoutButton({
   function discard() {
     start(async () => {
       try {
+        if (userId) clearDraftsForWorkout(userId, workoutId);
         await discardWorkoutAction(workoutId);
       } catch (e) {
         // redirect() throws NEXT_REDIRECT on success; anything else is a real failure
         if (e && typeof e === 'object' && 'digest' in e && String((e as { digest: string }).digest).startsWith('NEXT_REDIRECT')) throw e;
+        // Discarding failed and the workout goes on: its forms may write their drafts again.
+        unmarkWorkoutEnded(workoutId);
       }
     });
   }

@@ -6,15 +6,19 @@ export type ActiveWorkout = Pick<Workout, 'id' | 'title' | 'activity_type' | 'st
 
 /** The user's one running/paused workout, if any — for the shared app-shell
  * strip. There is at most one (enforced by a partial unique index), so this
- * is always a single cheap lookup, never per-page. */
-export async function getActiveWorkout(userId: string): Promise<ActiveWorkout | null> {
+ * is always a single cheap lookup, never per-page.
+ *
+ * `null` = there is none; `undefined` = the lookup itself failed, so nobody knows (callers must not treat that as
+ * "no workout" — e.g. the on-device draft housekeeping would otherwise delete a running workout's drafts). */
+export async function getActiveWorkout(userId: string): Promise<ActiveWorkout | null | undefined> {
   const supabase = await createClient();
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('workouts')
     .select('id, title, activity_type, started_at, paused_seconds, paused_at')
     .eq('user_id', userId)
     .eq('status', 'laeuft')
     .maybeSingle();
+  if (error) return undefined;
   return data as ActiveWorkout | null;
 }
 
@@ -47,7 +51,9 @@ export async function getWorkoutDetail(workoutId: string): Promise<WorkoutDetail
     .from('workout_exercises')
     .select('*, exercises(*), workout_sets(*)')
     .eq('workout_id', workoutId)
-    .order('position', { ascending: true });
+    .order('position', { ascending: true })
+    .order('created_at', { ascending: true })
+    .order('id', { ascending: true });
 
   const workoutExercises: WorkoutExerciseWithSets[] = (exercises ?? []).map((row) => {
     const r = row as unknown as WorkoutExercise & { exercises: Exercise; workout_sets: WorkoutSet[] };
