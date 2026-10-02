@@ -4,7 +4,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useFormStatus } from 'react-dom';
 import { ImagePlus, Layers, Loader2, MessageCircle, X } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
-import { sendMessageAction, sendImageMessageAction, markChatReadAction, loadOlderMessagesAction } from '@/app/(app)/team/chat/actions';
+import { sendMessageAction, sendImageMessageAction, markChatReadAction, loadOlderMessagesAction, loadMessagesUntilAction, type OlderMessagesResult } from '@/app/(app)/team/chat/actions';
+import { pinMessageAction, unpinMessageAction } from '@/app/(app)/team/chat/pin-actions';
+import { PinnedMessageStrip } from '@/components/chat/PinnedMessageStrip';
+import { Sheet } from '@/components/ui/Sheet';
+import { PIN_SELECT, pinFromRow, type PinnedMessage } from '@/lib/chat-pin';
 import { withdrawShareAction } from '@/app/(app)/team/chat/share-actions';
 import { cancelTrainingInviteAction, setRsvpAction } from '@/app/(app)/team/training/actions';
 import { TrainingInviteCard } from '@/components/training/TrainingInviteCard';
@@ -59,6 +63,9 @@ export function ChatRoom({
   initialShares,
   initialInvites,
   myTemplates,
+  isTeamAdmin,
+  initialPin,
+  pinAvailable,
 }: {
   teamId: string;
   currentUserId: string;
@@ -74,6 +81,11 @@ export function ChatRoom({
   initialShares: Record<string, PlanShareForViewer>;
   initialInvites: Record<string, TrainingInviteForViewer>;
   myTemplates: PlanTemplateWithItems[];
+  /** The viewer is a real team_admin of this team (the database decides again on every pin / unpin). */
+  isTeamAdmin: boolean;
+  initialPin: PinnedMessage | null;
+  /** False while the database has no pin table yet: no strip, no "Anheften". */
+  pinAvailable: boolean;
 }) {
   const [messages, setMessages] = useState(initialMessages);
   const [hasMore, setHasMore] = useState(initialHasMore);
@@ -91,6 +103,13 @@ export function ChatRoom({
   // Own answers currently in flight per invitation: a live refresh that lands
   // meanwhile must not overwrite the tap the user just made.
   const pendingRsvpRef = useRef<Map<string, number>>(new Map());
+  // The one pinned message of this team. The ref mirrors the state for the realtime handlers (created once per mount).
+  const [pin, setPin] = useState<PinnedMessage | null>(initialPin);
+  const pinRef = useRef<PinnedMessage | null>(initialPin);
+  pinRef.current = pin;
+  const [pinBusy, setPinBusy] = useState(false);
+  const [confirmPin, setConfirmPin] = useState<ChatMessage | null>(null);
+  const [pinNotice, setPinNotice] = useState<string | null>(null);
   const messagesRef = useRef<ChatMessage[]>(initialMessages);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const restoreScrollRef = useRef<number | null>(null);
@@ -299,6 +318,11 @@ export function ChatRoom({
           // place. No unread/push side effects — this is not an insert.
           const row = payload.new as ChatMessage;
           if (row.parent_message_id) return;
+          // The pin shows the ORIGINAL message: keep its preview in step with an edit, drop it with a delete.
+          if (pinRef.current?.id === row.id) {
+            if (row.deleted_at) setPin(null);
+            else setPin((prev) => (prev && prev.id === row.id ? { ...prev, preview: quotePreview(row.content) } : prev));
+          }
           if (row.deleted_at) {
             setMessages((prev) => prev.filter((m) => m.id !== row.id));
             setQuotes((prev) => (prev[row.id] ? { ...prev, [row.id]: { ...prev[row.id]!, deleted: true } } : prev));
@@ -367,7 +391,26 @@ export function ChatRoom({
         })
         .subscribe();
 
-      channels = [main, sharesChannel, trainingChannel];
+      const tracked = [main, sharesChannel, trainingChannel];
+      // The pin gets its own channel too: a missing / unpublished table can then only cost the pin's live update.
+      if (pinAvailable) {
+        const refetchPin = async () => {
+          const { data } = await supabase.from('team_chat_pins').select(PIN_SELECT).eq('team_id', teamId).maybeSingle();
+          if (!cancelled) setPin(pinFromRow(data));
+        };
+        tracked.push(
+          supabase
+            .channel(`chat-pin:${teamId}`)
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'team_chat_pins', filter: `team_id=eq.${teamId}` }, () => {
+              void refetchPin();
+            })
+            // Whatever changed between the page render and this subscription is picked up here.
+            .subscribe((status) => {
+              if (status === 'SUBSCRIBED') void refetchPin();
+            }),
+        );
+      }
+      channels = tracked;
     });
 
     return () => {
@@ -465,24 +508,29 @@ export function ChatRoom({
     setInvites((prev) => (prev[invite.messageId] ? { ...prev, [invite.messageId]: { ...prev[invite.messageId]!, cancelledAt: new Date().toISOString() } } : prev));
   }
 
+  /** Adds a page of older history in front of what is on screen, keeping the reader's place. */
+  function applyOlder(res: OlderMessagesResult) {
+    restoreScrollRef.current = listRef.current ? listRef.current.scrollHeight - listRef.current.scrollTop : null;
+    setMessages((prev) => {
+      const have = new Set(prev.map((m) => m.id));
+      return [...res.messages.filter((m) => !have.has(m.id)), ...prev];
+    });
+    setMentionsMap((prev) => ({ ...res.mentions, ...prev }));
+    setSocial((prev) => ({ ...res.social, ...prev }));
+    setReactions((prev) => ({ ...res.reactions, ...prev }));
+    setQuotes((prev) => ({ ...res.quotes, ...prev }));
+    setShares((prev) => ({ ...res.shares, ...prev }));
+    setInvites((prev) => ({ ...res.invites, ...prev }));
+    setHasMore(res.hasMore);
+  }
+
   async function loadOlder(): Promise<boolean> {
     const oldest = messagesRef.current[0];
     if (!oldest || loadingOlder) return false;
     setLoadingOlder(true);
     try {
       const res = await loadOlderMessagesAction(teamId, oldest.created_at);
-      restoreScrollRef.current = listRef.current ? listRef.current.scrollHeight - listRef.current.scrollTop : null;
-      setMessages((prev) => {
-        const have = new Set(prev.map((m) => m.id));
-        return [...res.messages.filter((m) => !have.has(m.id)), ...prev];
-      });
-      setMentionsMap((prev) => ({ ...res.mentions, ...prev }));
-      setSocial((prev) => ({ ...res.social, ...prev }));
-      setReactions((prev) => ({ ...res.reactions, ...prev }));
-      setQuotes((prev) => ({ ...res.quotes, ...prev }));
-      setShares((prev) => ({ ...res.shares, ...prev }));
-      setInvites((prev) => ({ ...res.invites, ...prev }));
-      setHasMore(res.hasMore);
+      applyOlder(res);
       return res.hasMore;
     } finally {
       setLoadingOlder(false);
@@ -496,6 +544,27 @@ export function ChatRoom({
   async function jumpTo(id: string) {
     let el = document.getElementById(`msg-${id}`);
     let more = hasMore;
+    if (!el && more && !loadingOlder) {
+      // A message far back (an old pin, an old quote): ONE request loads everything between the screen and the target
+      // (bounded on the server) instead of paging sixty messages at a time. The paging loop below is the fallback.
+      const oldest = messagesRef.current[0];
+      if (oldest) {
+        setLoadingOlder(true);
+        try {
+          const res = await loadMessagesUntilAction(teamId, id, oldest.created_at);
+          if (res.messages.length > 0) {
+            applyOlder(res);
+            more = res.hasMore;
+            await new Promise((r) => setTimeout(r, 80));
+            el = document.getElementById(`msg-${id}`);
+          }
+        } catch {
+          /* fall back to paging */
+        } finally {
+          setLoadingOlder(false);
+        }
+      }
+    }
     for (let i = 0; !el && more && i < 8; i++) {
       more = await loadOlder();
       await new Promise((r) => setTimeout(r, 80));
@@ -514,6 +583,46 @@ export function ChatRoom({
       restoreScrollRef.current = null;
     }
   }, [messages]);
+
+  /** The pin shows the original message; this is what to show right after a successful pin (realtime then confirms it). */
+  function pinPreviewOf(m: ChatMessage): PinnedMessage {
+    return quoteFromMessage({ id: m.id, authorName: m.authorName, content: m.content, message_type: m.message_type, deleted_at: m.deleted_at });
+  }
+
+  async function doPin(m: ChatMessage, replace: boolean) {
+    setPinBusy(true);
+    setPinNotice(null);
+    const res = await pinMessageAction({ messageId: m.id, replace }).catch(() => ({ ok: false as const, code: 'error' as const, error: 'Keine Verbindung. Bitte versuche es erneut.' }));
+    setPinBusy(false);
+    if (res.ok) {
+      setPin(pinPreviewOf(m));
+      setConfirmPin(null);
+    } else if (res.code === 'pin_exists') {
+      setConfirmPin(m); // someone pinned meanwhile: ask before replacing it
+    } else {
+      setConfirmPin(null);
+      setPinNotice(res.error);
+    }
+  }
+
+  async function doUnpin(messageId: string) {
+    setPinBusy(true);
+    setPinNotice(null);
+    const res = await unpinMessageAction({ messageId }).catch(() => ({ ok: false as const, error: 'Keine Verbindung. Bitte versuche es erneut.' }));
+    setPinBusy(false);
+    if (res.ok) setPin((prev) => (prev?.id === messageId ? null : prev));
+    else setPinNotice(res.error);
+  }
+
+  function togglePin(m: ChatMessage) {
+    if (pinRef.current?.id === m.id) void doUnpin(m.id);
+    else if (pinRef.current) setConfirmPin(m); // replacing an existing pin always asks first
+    else void doPin(m, false);
+  }
+
+  /** What a team admin's menu offers for a message (nothing for anyone else, and nothing for automatic events). */
+  const pinFor = (m: ChatMessage) =>
+    isTeamAdmin && pinAvailable && m.message_type !== 'system' ? { pinned: pin?.id === m.id, busy: pinBusy, onToggle: () => togglePin(m) } : undefined;
 
   async function saveEdit(id: string, text: string, mentionIds: string[]): Promise<string | null> {
     const res = await editMessageAction(id, text, mentionIds);
@@ -671,6 +780,14 @@ export function ChatRoom({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      {pinAvailable && pin && (
+        <PinnedMessageStrip teamId={teamId} pin={pin} canManage={isTeamAdmin} busy={pinBusy} onView={() => void jumpTo(pin.id)} onUnpin={() => void doUnpin(pin.id)} />
+      )}
+      {pinNotice && (
+        <p role="alert" className="shrink-0 bg-red-500/10 px-4 py-2 text-xs font-medium text-red-300">
+          {pinNotice}
+        </p>
+      )}
       <div ref={listRef} onScroll={handleScroll} className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 pb-3 pt-4">
         {hasMore && messages.length > 0 && (
           <button
@@ -753,6 +870,7 @@ export function ChatRoom({
                       <span className="mt-0.5 px-1 text-[10px] text-neutral-400">
                         {new Date(m.created_at).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}
                       </span>
+                      <MessageActions pin={pinFor(m)} />
                       <ReactionChips messageId={m.id} currentUserId={currentUserId} state={reactions[m.id]} onChange={setReaction} className="mt-1 px-1" />
                     </div>
                   </div>
@@ -787,7 +905,7 @@ export function ChatRoom({
                     edited={!!m.edited_at}
                     mentions={mentionsOf(m.id)}
                     currentUserId={currentUserId}
-                    menu={mine ? <MessageActions onEdit={() => setEditingId(m.id)} onDelete={() => removeMessage(m.id)} /> : undefined}
+                    menu={mine || pinFor(m) ? <MessageActions onEdit={mine ? () => setEditingId(m.id) : undefined} onDelete={mine ? () => removeMessage(m.id) : undefined} pin={pinFor(m)} /> : undefined}
                     editor={
                       editingId === m.id ? (
                         <MessageEditor initial={m.content} members={members} initialMentions={mentionsOf(m.id)} onSave={(text, ids) => saveEdit(m.id, text, ids)} onCancel={() => setEditingId(null)} />
@@ -855,7 +973,7 @@ export function ChatRoom({
                       />
                       {share.title !== m.content && (
                         <div className="mt-1 flex items-start gap-1">
-                          {mine && <MessageActions onEdit={() => setEditingId(m.id)} onDelete={() => removeMessage(m.id)} />}
+                          <MessageActions onEdit={mine ? () => setEditingId(m.id) : undefined} onDelete={mine ? () => removeMessage(m.id) : undefined} pin={pinFor(m)} />
                           <div className="min-w-0 max-w-[78vw] px-1 text-sm leading-relaxed text-neutral-600">
                             <ChatMarkdown text={m.content} tone="bubble" mentions={mentionsOf(m.id)} currentUserId={currentUserId} />
                           </div>
@@ -865,6 +983,7 @@ export function ChatRoom({
                         {m.edited_at && <span className="mr-1 italic">bearbeitet</span>}
                         {new Date(m.created_at).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}
                       </span>
+                      {share.title === m.content && <MessageActions pin={pinFor(m)} />}
                       <ReactionChips messageId={m.id} currentUserId={currentUserId} state={reactions[m.id]} onChange={setReaction} className="mt-1 px-1" />
                     </div>
                   </div>
@@ -914,7 +1033,7 @@ export function ChatRoom({
                     ) : (
                       (m.message_type !== 'image' || m.content) && (
                         <div className="mt-0.5 flex items-start gap-1 first:mt-0">
-                          {mine && <MessageActions onEdit={() => setEditingId(m.id)} onDelete={() => removeMessage(m.id)} />}
+                          {mine && <MessageActions onEdit={() => setEditingId(m.id)} onDelete={() => removeMessage(m.id)} pin={pinFor(m)} />}
                           <div
                             role="button"
                             tabIndex={0}
@@ -931,6 +1050,7 @@ export function ChatRoom({
                             {quoteOf(m) && <QuoteBlock quote={quoteOf(m)!} onJump={jumpTo} tone={mine ? 'own' : 'default'} />}
                             <ChatMarkdown text={m.content} tone={mine ? 'bubble-own' : 'bubble'} mentions={mentionsOf(m.id)} currentUserId={currentUserId} />
                           </div>
+                          {!mine && <MessageActions pin={pinFor(m)} />}
                         </div>
                       )
                     )}
@@ -938,6 +1058,7 @@ export function ChatRoom({
                       {m.edited_at && <span className="mr-1 italic">bearbeitet</span>}
                       {new Date(m.created_at).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}
                     </span>
+                    {m.message_type === 'image' && !m.content && <MessageActions pin={pinFor(m)} />}
                     <ReactionChips messageId={m.id} currentUserId={currentUserId} state={reactions[m.id]} onChange={setReaction} className="mt-1 px-1" />
                   </div>
                 </div>
@@ -1076,6 +1197,19 @@ export function ChatRoom({
           onClose={() => setSavingShare(null)}
           onSaved={(templateId) => markShareSaved(savingShare.id, templateId)}
         />
+      )}
+      {confirmPin && (
+        <Sheet title="Angeheftete Nachricht ersetzen?" onClose={() => setConfirmPin(null)}>
+          <p className="text-sm text-neutral-600">Die aktuell angeheftete Nachricht wird durch diese ersetzt. Die ursprüngliche Nachricht bleibt im Chat erhalten.</p>
+          <div className="mt-4 flex gap-2 pb-1">
+            <button type="button" onClick={() => setConfirmPin(null)} className="btn-secondary min-h-[44px] flex-1">
+              Abbrechen
+            </button>
+            <button type="button" disabled={pinBusy} onClick={() => void doPin(confirmPin, true)} className="btn-primary min-h-[44px] flex-1">
+              {pinBusy ? 'Einen Moment…' : 'Ersetzen'}
+            </button>
+          </div>
+        </Sheet>
       )}
       {pickingTemplate && (
         <SharePickerSheet

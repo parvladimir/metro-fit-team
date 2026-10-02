@@ -5,6 +5,7 @@ import { requireAuthUser, getPrimaryTeamMembership } from '@/lib/data/profile';
 import { getMessagesPage, getChatLastReadAt, getEventReplies, getMessageReactions, getMentionMembers, getMessageMentions, getQuotes } from '@/lib/data/chat';
 import { getPlanSharesForViewer } from '@/lib/data/plan-shares';
 import { getTrainingInvitesForViewer } from '@/lib/data/training-invites';
+import { getTeamPin } from '@/lib/data/chat-pin';
 import { getTemplates } from '@/lib/data/plan-templates';
 import { isValidMessageId } from '@/lib/event-social';
 import { ChatRoom } from '@/components/chat/ChatRoom';
@@ -30,7 +31,7 @@ export default async function ChatPage({ searchParams }: { searchParams: Promise
     getChatLastReadAt(membership.team_id, user.id),
   ]);
 
-  const [social, reactions, members, mentions, quotes, shares, invites, myTemplates] = await Promise.all([
+  const [social, reactions, members, mentions, quotes, shares, invites, myTemplates, pinLoad] = await Promise.all([
     getEventReplies(messages.filter((m) => m.message_type === 'system').map((m) => m.id)),
     getMessageReactions(messages.map((m) => m.id)),
     getMentionMembers(membership.team_id, user.id),
@@ -39,6 +40,7 @@ export default async function ChatPage({ searchParams }: { searchParams: Promise
     getPlanSharesForViewer(messages.map((m) => m.id), user.id),
     getTrainingInvitesForViewer(messages.map((m) => m.id), user.id),
     getTemplates(user.id),
+    getTeamPin(membership.team_id),
   ]);
 
   return (
@@ -73,6 +75,10 @@ export default async function ChatPage({ searchParams }: { searchParams: Promise
         initialShares={shares}
         initialInvites={invites}
         myTemplates={myTemplates}
+        isTeamAdmin={membership.role === 'team_admin'}
+        initialPin={pinLoad.status === 'ok' ? pinLoad.pin : null}
+        // Until the database has the pin table (a separate, later step) there is no strip and no "Anheften".
+        pinAvailable={pinLoad.status !== 'unavailable'}
         focusMessageId={isValidMessageId(message) ? message : null}
       />
     </div>
