@@ -26,13 +26,16 @@ export default async function FreundschaftsduellPage({ searchParams }: { searchP
   const today = localDayKey(now);
   const duels = await getDuelsForViewer(user.id, now);
 
-  // At most one open duel per person (the database guarantees it), so "the
-  // current one" is simply the first that is still pending, upcoming or running.
-  const open = duels.find((d) => d.phase === 'pending' || d.phase === 'upcoming' || d.phase === 'active') ?? null;
+  // Normally at most one duel is open per person. Every open one is shown anyway:
+  // if a participant was removed from the team and later rejoined, an older duel
+  // becomes visible again next to a newer one, and neither may be hidden from the
+  // person who is in both — they must be able to see and end each.
+  const isOpen = (d: (typeof duels)[number]) => d.phase === 'pending' || d.phase === 'upcoming' || d.phase === 'active';
+  const openDuels = duels.filter(isOpen);
   const justFinished = duels.find((d) => d.phase === 'finished' && today <= addDaysToKey(d.endsOn, DUEL_RESULT_VISIBLE_DAYS)) ?? null;
-  const history = duels.filter((d) => d !== open && d !== justFinished && d.phase !== 'pending' && d.phase !== 'upcoming' && d.phase !== 'active').slice(0, 10);
+  const history = duels.filter((d) => !isOpen(d) && d !== justFinished).slice(0, 10);
 
-  const teammates = open ? [] : await getInvitableTeammates(membership.team_id, user.id);
+  const teammates = openDuels.length > 0 ? [] : await getInvitableTeammates(membership.team_id, user.id);
   const preselected = teammates.some((p) => p.id === mit) ? mit : undefined;
 
   return (
@@ -45,10 +48,12 @@ export default async function FreundschaftsduellPage({ searchParams }: { searchP
         Ein freiwilliges Duell zu zweit: 7 Tage, ein Ziel an Trainingstagen. Kein Ranking, keine Punkte — nur ihr beide seht euren Fortschritt.
       </p>
 
-      {open && <DuelCard duel={open} now={now} />}
+      {openDuels.map((d) => (
+        <DuelCard key={d.id} duel={d} now={now} />
+      ))}
       {justFinished && <DuelCard duel={justFinished} now={now} />}
 
-      {!open && (
+      {openDuels.length === 0 && (
         <section id="neu" className="flex flex-col gap-2">
           <p className="section-title">Neues Duell vorschlagen</p>
           <DuelProposalForm

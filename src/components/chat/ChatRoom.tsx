@@ -162,7 +162,7 @@ export function ChatRoom({
 
   useEffect(() => {
     const supabase = createClient();
-    let channel: ReturnType<typeof supabase.channel> | null = null;
+    let channels: ReturnType<typeof supabase.channel>[] = [];
     let cancelled = false;
     const inviteTimers = inviteTimersRef.current; // a stable Map, never reassigned
 
@@ -199,7 +199,8 @@ export function ChatRoom({
       if (cancelled) return;
       if (session) supabase.realtime.setAuth(session.access_token);
 
-      channel = supabase
+      // The core chat channel: only tables that have always existed and are published.
+      const main = supabase
         .channel(`messages:${teamId}`)
         .on(
           'postgres_changes',
@@ -254,7 +255,9 @@ export function ChatRoom({
                 .select('*, plan_share_items(*), profiles(full_name)')
                 .eq('id', shareId)
                 .maybeSingle();
-              if (s) {
+              // Only a share actually bound to THIS message may render on it — a member can
+              // write arbitrary metadata on their own message, so the hint alone proves nothing.
+              if (s && (s as unknown as { message_id: string }).message_id === row.id) {
                 const { plan_share_items, profiles, ...share } = s as unknown as PlanShareWithItems & {
                   plan_share_items: PlanShareWithItems['items'];
                   profiles: { full_name: string | null } | null;
@@ -304,25 +307,6 @@ export function ChatRoom({
             setMessages((prev) => prev.map((m) => (m.id === row.id ? { ...m, content: row.content, edited_at: row.edited_at, metadata: row.metadata } : m)));
           }
         })
-        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'plan_shares', filter: `team_id=eq.${teamId}` }, (payload) => {
-          // Only withdrawn_at ever changes after publish (the snapshot itself
-          // is immutable) — reflect it live for every viewer, not just the author.
-          const row = payload.new as { message_id: string; withdrawn_at: string | null };
-          setShares((prev) => (prev[row.message_id] ? { ...prev, [row.message_id]: { ...prev[row.message_id]!, withdrawn_at: row.withdrawn_at } } : prev));
-        })
-        // Any real change to an invitation arrives as an UPDATE — its own edits and
-        // cancellation, and every change to an answer (including a removal, whose
-        // DELETE event could not be routed to a card, via the rsvp_version bump).
-        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'training_invites', filter: `team_id=eq.${teamId}` }, (payload) => {
-          scheduleInviteRefetch((payload.new as { id: string }).id);
-        })
-        // Belt and braces: new / changed answers also announce themselves directly.
-        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'training_invite_rsvps', filter: `team_id=eq.${teamId}` }, (payload) => {
-          scheduleInviteRefetch((payload.new as { invite_id: string }).invite_id);
-        })
-        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'training_invite_rsvps', filter: `team_id=eq.${teamId}` }, (payload) => {
-          scheduleInviteRefetch((payload.new as { invite_id: string }).invite_id);
-        })
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'message_mentions', filter: `team_id=eq.${teamId}` }, (payload) => {
           const r = payload.new as { message_id: string; mentioned_user_id: string; mention_text: string };
           setMentionsMap((prev) => {
@@ -349,13 +333,48 @@ export function ChatRoom({
           if (r.message_id && r.user_id && r.reaction_type) updateReactions(r.message_id, r.user_id, r.reaction_type, false);
         })
         .subscribe();
+
+      // Card updates live on their OWN channels. Realtime rejects a whole channel when any
+      // one binding names a table that does not exist or is not in the publication, and a
+      // channel that is rejected delivers nothing — so a card feature whose table is not
+      // available (e.g. the app is deployed a moment before its migration, or a table was
+      // never published) must never be able to silence live messages, reactions and
+      // mentions. Each of these only ever costs its own live updates.
+      const sharesChannel = supabase
+        .channel(`plan-shares:${teamId}`)
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'plan_shares', filter: `team_id=eq.${teamId}` }, (payload) => {
+          // Only withdrawn_at ever changes after publish (the snapshot itself
+          // is immutable) — reflect it live for every viewer, not just the author.
+          const row = payload.new as { message_id: string; withdrawn_at: string | null };
+          setShares((prev) => (prev[row.message_id] ? { ...prev, [row.message_id]: { ...prev[row.message_id]!, withdrawn_at: row.withdrawn_at } } : prev));
+        })
+        .subscribe();
+
+      const trainingChannel = supabase
+        .channel(`training-invites:${teamId}`)
+        // Any real change to an invitation arrives as an UPDATE — its own edits and
+        // cancellation, and every change to an answer (including a removal, whose
+        // DELETE event could not be routed to a card, via the rsvp_version bump).
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'training_invites', filter: `team_id=eq.${teamId}` }, (payload) => {
+          scheduleInviteRefetch((payload.new as { id: string }).id);
+        })
+        // Belt and braces: new / changed answers also announce themselves directly.
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'training_invite_rsvps', filter: `team_id=eq.${teamId}` }, (payload) => {
+          scheduleInviteRefetch((payload.new as { invite_id: string }).invite_id);
+        })
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'training_invite_rsvps', filter: `team_id=eq.${teamId}` }, (payload) => {
+          scheduleInviteRefetch((payload.new as { invite_id: string }).invite_id);
+        })
+        .subscribe();
+
+      channels = [main, sharesChannel, trainingChannel];
     });
 
     return () => {
       cancelled = true;
       inviteTimers.forEach((timer) => clearTimeout(timer));
       inviteTimers.clear();
-      if (channel) supabase.removeChannel(channel);
+      channels.forEach((c) => supabase.removeChannel(c));
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [teamId, currentUserId]);
@@ -418,9 +437,12 @@ export function ChatRoom({
     setInvites((prev) => (prev[invite.messageId] ? { ...prev, [invite.messageId]: applyOwnRsvp(prev[invite.messageId]!, next) } : prev));
     let ok = false;
     try {
-      ok = (await setRsvpAction(invite.id, next)).ok;
+      const res = await setRsvpAction(invite.id, next);
+      ok = res.ok;
+      if (!res.ok) setSendError(res.error);
     } catch {
       ok = false;
+      setSendError('Das hat nicht geklappt. Bitte versuche es noch einmal.');
     } finally {
       const left = (pendingRsvpRef.current.get(invite.id) ?? 1) - 1;
       if (left <= 0) pendingRsvpRef.current.delete(invite.id);

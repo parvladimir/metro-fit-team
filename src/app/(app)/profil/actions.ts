@@ -49,8 +49,10 @@ export async function updatePrivacySettingsAction(formData: FormData) {
 
 const DEFAULT_MOTIVATION_PAUSE_DAYS = 28;
 
-/** `notification_preferences` columns that only exist once migration 0044
- * (quiet hours / pause) and 0045 (duel / joint-training opt-ins) are applied. */
+/** Columns that exist only once migration 0045 (duel / joint-training opt-ins) is applied. */
+const NEWEST_OPT_IN_COLUMNS: ReadonlySet<string> = new Set(OPT_IN_CATEGORIES);
+
+/** Columns that exist only once migration 0044 (quiet hours / pause) AND 0045 are applied. */
 const COLUMNS_ADDED_AFTER_BASELINE: ReadonlySet<string> = new Set([
   'quiet_hours_start',
   'quiet_hours_end',
@@ -85,19 +87,23 @@ export async function updateNotificationPreferencesAction(formData: FormData) {
     payload.motivation_paused_until = null;
   }
 
-  const { error } = await supabase.from('notification_preferences').update(payload).eq('user_id', user.id);
-  if (error && (error.code === 'PGRST204' || error.code === '42703')) {
-    // The code can be live before its migration is applied (migrations reach
-    // production in a separate, human-triggered step). An unknown-column error
-    // then rejects the whole update; save the columns the old schema does have
-    // instead of silently dropping the entire form.
-    console.error('notification_preferences update hit a column the database does not have yet; retrying without newer columns:', error.message);
-    const baseline = Object.fromEntries(Object.entries(payload).filter(([key]) => !COLUMNS_ADDED_AFTER_BASELINE.has(key)));
-    const retry = await supabase.from('notification_preferences').update(baseline).eq('user_id', user.id);
-    if (retry.error) console.error('notification_preferences baseline update failed:', retry.error.message);
-  } else if (error) {
-    console.error('notification_preferences update failed:', error.message);
+  const write = (values: Record<string, boolean | string | null>) => supabase.from('notification_preferences').update(values).eq('user_id', user.id);
+  const withoutKeys = (keys: ReadonlySet<string>) => Object.fromEntries(Object.entries(payload).filter(([key]) => !keys.has(key)));
+  const isMissingColumn = (e: { code?: string } | null) => !!e && (e.code === 'PGRST204' || e.code === '42703');
+
+  let { error } = await write(payload);
+  if (isMissingColumn(error)) {
+    // The code can be live before its migrations are applied (migrations reach
+    // production in a separate, human-triggered step), and an unknown-column
+    // error then rejects the whole update. Retry without the newest columns
+    // first (0045: the two opt-ins), and only then without the older ones too
+    // (0044: quiet hours / pause) — so the most that is ever held back is what
+    // the database really cannot store yet, instead of the whole form.
+    console.error('notification_preferences update hit a column the database does not have yet; retrying without newer columns:', error?.message);
+    ({ error } = await write(withoutKeys(NEWEST_OPT_IN_COLUMNS)));
+    if (isMissingColumn(error)) ({ error } = await write(withoutKeys(COLUMNS_ADDED_AFTER_BASELINE)));
   }
+  if (error) console.error('notification_preferences update failed:', error.message);
   revalidatePath('/profil/einstellungen');
 }
 

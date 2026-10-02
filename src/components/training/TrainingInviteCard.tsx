@@ -17,15 +17,23 @@ import {
 } from '@/lib/training-invites';
 import { t } from '@/lib/i18n';
 
-/** Re-renders once a minute while the training is still ahead, so "bereits
- * gestartet" appears on a card that has been open on screen. */
-function useNow(active: boolean): Date {
+/** Re-renders while the training is still ahead, so "bereits gestartet" appears
+ * on a card that stays open on screen. The timer is tied to the invitation (its
+ * start time and whether it is cancelled) — never to what the card currently
+ * displays — so an unrelated re-render (a new message, a reaction) can neither
+ * stop it nor leave the card showing buttons for a training that has begun. */
+function useNow(startsAt: string, stopped: boolean): Date {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
-    if (!active) return;
-    const timer = setInterval(() => setNow(new Date()), 60_000);
+    const startMs = new Date(startsAt).getTime();
+    if (stopped || Date.now() >= startMs) return;
+    const timer = setInterval(() => {
+      const tick = new Date();
+      setNow(tick);
+      if (tick.getTime() >= startMs) clearInterval(timer);
+    }, 30_000);
     return () => clearInterval(timer);
-  }, [active]);
+  }, [startsAt, stopped]);
   return now;
 }
 
@@ -44,8 +52,7 @@ export function TrainingInviteCard({
   onRsvp: (invite: TrainingInviteForViewer, status: RsvpStatus | null) => void;
   onCancel: (invite: TrainingInviteForViewer) => void;
 }) {
-  const initialState = inviteState(invite);
-  const now = useNow(initialState === 'upcoming');
+  const now = useNow(invite.startsAt, !!invite.cancelledAt);
   const state = inviteState(invite, now);
   const isOrganizer = invite.organizerId === currentUserId;
   const counts = inviteCounts(invite);

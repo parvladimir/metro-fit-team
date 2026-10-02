@@ -167,7 +167,11 @@ revoke all on function public.has_open_duel(uuid, uuid, date) from public, anon,
 -- two crossing proposals cannot deadlock, BEFORE any duel row is read: that is
 -- what makes "A invites B" racing "C invites B" produce exactly one winner.
 -- "Invitee not in this team" and "invitee already busy" raise the same
--- neutral error, so a caller learns nothing about someone else's state.
+-- neutral error: it says THAT the person cannot be invited right now, never
+-- WHY, so an outsider probing foreign user ids learns nothing. A teammate
+-- asking about a teammate can still infer "busy" (the form only offers current
+-- members) — that much is inherent in the rule that a person has at most one
+-- open duel; what stays hidden is with whom, the terms and everything else.
 -- ---------------------------------------------------------------------------
 create or replace function public.propose_team_duel(
   p_team_id uuid, p_invitee_id uuid, p_target_days int, p_starts_on date

@@ -2846,6 +2846,20 @@ describeIntegration('Row Level Security', () => {
         expect((await admin.from('team_duels').select('id').in('id', [withdrawn, open])).data).toEqual([]);
         expect((await propose(C3, C2.id)).error).toBeNull(); // C3 is no longer held by the departed account's invitation
       });
+
+      it('193. a person who ends up in two open duels (a partner was removed, then rejoined) can still see and end each of them', async () => {
+        const older = await insertDuel({ inviter_id: C2.id, invitee_id: C3.id, status: 'accepted', starts_on: dayKeyPlus(-1) });
+        await admin.from('team_members').delete().eq('team_id', cTeamId).eq('user_id', C3.id);
+        // While C3 is away the dangling duel does not block C2 — so C2 can enter a new one with C1.
+        const newer = (await propose(C2, C1.id)).data![0].duel_id as string;
+        expect((await respond(C1, newer, true)).data![0].duel_status).toBe('accepted');
+
+        await admin.from('team_members').insert({ team_id: cTeamId, user_id: C3.id, role: 'member' });
+        const visible = ((await C2.client.from('team_duels').select('id')).data ?? []).map((r) => r.id);
+        expect(visible).toEqual(expect.arrayContaining([older.id, newer])); // neither is hidden from the person in both
+        expect((await cancel(C2, older.id)).data![0]).toEqual({ duel_status: 'cancelled', changed: true });
+        expect((await cancel(C2, newer)).data![0]).toEqual({ duel_status: 'cancelled', changed: true });
+      });
     });
 
     describe('training invitations ("Wer ist dabei?")', () => {

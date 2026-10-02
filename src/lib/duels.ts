@@ -243,8 +243,10 @@ export function validateDuelInput(input: { inviteeId: unknown; targetDays: unkno
 
 /** German text for an error from the duel functions (matched by the error
  * code the database raises). `invitee_unavailable` is deliberately one vague
- * sentence: it covers "busy" and "not in this team" alike, so the person
- * asking learns nothing about the other's situation. */
+ * sentence: it covers "busy" and "not in this team" alike and never says why.
+ * (A teammate can still infer "busy", since only current members are offered —
+ * inherent in the one-open-duel rule; the other person, the terms and the
+ * state of the duel stay hidden.) */
 export function duelErrorText(message: string | null | undefined): string {
   const m = message ?? '';
   if (m.includes('invalid_start_date')) return `Der Start muss in der Zukunft liegen — frühestens morgen, höchstens ${DUEL_MAX_START_LEAD_DAYS} Tage im Voraus.`;
