@@ -408,6 +408,7 @@ export const de = {
   'admin.rankingRules': 'Ranglistenregeln',
   'admin.teamSettings': 'Team-Einstellungen',
   'admin.activity': 'Aktivitäten',
+  'admin.engagement': 'Auswertung',
   'admin.removeMember': 'Mitglied entfernen',
   'admin.removeMember.confirm': '{{name}} wirklich aus dem Team entfernen?',
   'admin.makeAdmin': 'Zum Admin machen',

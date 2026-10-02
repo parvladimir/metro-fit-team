@@ -3243,5 +3243,246 @@ describeIntegration('Row Level Security', () => {
         }
       });
     });
+
+    describe('engagement evaluation (admin-only, aggregate-only)', () => {
+      type Who = typeof userB;
+      const WHITELIST = [
+        'week_start', 'in_progress', 'member_count', 'counted_members', 'active_participants', 'returning_participants',
+        'supported_workouts', 'goal_reached_members', 'missions_started', 'missions_reached', 'missions_cancelled',
+        'duels_accepted', 'duels_finished', 'training_invites_created',
+      ];
+      const berlinTodayKey = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Berlin' });
+      const isoWeekday = (key: string) => {
+        const d = new Date(`${key}T00:00:00Z`).getUTCDay();
+        return d === 0 ? 7 : d;
+      };
+      /** Monday (YYYY-MM-DD, Berlin) of the week `offset` weeks from the current one. */
+      const mondayOf = (offset: number) => {
+        const today = berlinTodayKey();
+        return addDaysToKey(today, -(isoWeekday(today) - 1) + offset * 7);
+      };
+      const at = (key: string, hhmm: string) => localDateTimeToUtc(`${key}T${hhmm}`)!.toISOString();
+
+      const summary = (who: Who, weeks: number | null = 8, team: string = cTeamId) =>
+        who.client.rpc('get_team_engagement_summary', { p_team_id: team, p_weeks: weeks });
+      const weekRow = async (offset: number, weeks = 8) => {
+        const res = await summary(C1, weeks);
+        expect(res.error).toBeNull();
+        const row = (res.data as Record<string, number | boolean | string>[]).find((r) => r.week_start === mondayOf(offset));
+        expect(row, `week ${mondayOf(offset)}`).toBeDefined();
+        return row as Record<string, number | boolean>;
+      };
+      const expectError = async (p: PromiseLike<{ error: { message: string } | null }>, text: string) => {
+        const r = await p;
+        expect(r.error?.message, text).toContain(text);
+      };
+
+      /** A completed workout at an exact instant, through the normal user flow so its chat event exists. */
+      const finishAt = async (user: Who, instant: string) => {
+        const { data: w, error } = await user.client
+          .from('workouts')
+          .insert({ user_id: user.id, team_id: cTeamId, activity_type: 'krafttraining', status: 'laeuft', title: 'Auswertung', started_at: new Date(new Date(instant).getTime() - 20 * 60_000).toISOString() })
+          .select('id')
+          .single();
+        expect(error).toBeNull();
+        const upd = await user.client.from('workouts').update({ status: 'abgeschlossen', finished_at: instant, duration_seconds: 1200 }).eq('id', w!.id);
+        expect(upd.error).toBeNull();
+        return w!.id as string;
+      };
+      const eventOf = async (workoutId: string) => {
+        const { data } = await admin.from('messages').select('id').eq('workout_id', workoutId).eq('event_type', 'workout_completed').single();
+        return data!.id as string;
+      };
+
+      beforeEach(async () => {
+        await admin.from('workouts').delete().in('user_id', [C1.id, C2.id, C3.id]);
+        await admin.from('messages').delete().eq('team_id', cTeamId).eq('message_type', 'system');
+        await admin.from('team_duels').delete().eq('team_id', cTeamId);
+        await admin.from('team_missions').delete().eq('team_id', cTeamId);
+        await admin.from('profiles').update({ weekly_goal: 3 }).in('id', [C1.id, C2.id, C3.id]);
+        await admin.from('privacy_settings').upsert([C1, C2, C3].map((u) => ({ user_id: u.id, activity_feed_opt_in: true })));
+        const { data: members } = await admin.from('team_members').select('user_id').eq('team_id', cTeamId);
+        for (const u of [C1, C2, C3]) {
+          if (!(members ?? []).some((m) => m.user_id === u.id)) await admin.from('team_members').insert({ team_id: cTeamId, user_id: u.id, role: u === C1 ? 'team_admin' : 'member' });
+        }
+      });
+
+      it('183. only a team admin of THAT team can read it — not a member, an admin of another team, an outsider or an anonymous caller', async () => {
+        expect((await summary(C1)).error).toBeNull();
+        for (const who of [C2, C3, outsider, userA]) await expectError(summary(who), 'not_team_admin');
+        await expectError(summary(C1, 4, outsiderTeamId), 'not_team_admin'); // an admin asking about a team that is not theirs
+        const anon = createClient(SUPABASE_URL, ANON_KEY);
+        expect((await anon.rpc('get_team_engagement_summary', { p_team_id: cTeamId, p_weeks: 4 })).error).not.toBeNull();
+      });
+
+      it('184. the result is counts only: exactly the agreed columns, no id, name, text or per-person value', async () => {
+        const res = await summary(C1, 3);
+        expect(res.error).toBeNull();
+        const rows = res.data as Record<string, unknown>[];
+        expect(rows).toHaveLength(3);
+        for (const row of rows) {
+          expect(Object.keys(row).sort()).toEqual([...WHITELIST].sort());
+          for (const [key, value] of Object.entries(row)) {
+            if (key === 'week_start') expect(value).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+            else expect(['number', 'boolean'], key).toContain(typeof value);
+          }
+        }
+        // Nothing person-shaped anywhere in the serialized payload.
+        const raw = JSON.stringify(res.data);
+        for (const user of [C1, C2, C3]) expect(raw).not.toContain(user.id);
+        expect(raw).not.toMatch(/Test|@|full_name|email/i);
+      });
+
+      it('185. the window is clamped to 1–26 Berlin weeks, newest first, consecutive Mondays, only the current week in progress', async () => {
+        expect((await summary(C1, 0)).data).toHaveLength(1);
+        expect((await summary(C1, -5)).data).toHaveLength(1);
+        expect((await summary(C1, 100)).data).toHaveLength(26);
+        expect((await summary(C1, null)).data).toHaveLength(8);
+        const rows = (await summary(C1, 6)).data as { week_start: string; in_progress: boolean }[];
+        expect(rows.map((r) => r.week_start)).toEqual([0, -1, -2, -3, -4, -5].map(mondayOf));
+        expect(rows.map((r) => r.in_progress)).toEqual([true, false, false, false, false, false]);
+      });
+
+      it('186. a week is Monday to Sunday in Berlin time: Sunday 23:30 and Monday 00:30 land in different weeks; returning means active the week before too', async () => {
+        const thisMonday = mondayOf(0);
+        const lastMonday = mondayOf(-1);
+        await finishAt(C2, at(thisMonday, '00:30')); // first minutes of this week
+        await finishAt(C2, at(addDaysToKey(thisMonday, -1), '23:30')); // last minutes of last week
+        await finishAt(C3, at(addDaysToKey(lastMonday, 2), '12:00')); // only last week
+
+        const current = await weekRow(0);
+        const previous = await weekRow(-1);
+        expect(current.active_participants).toBe(1);
+        expect(current.returning_participants).toBe(1); // C2 was active last week too
+        expect(previous.active_participants).toBe(2);
+        expect(previous.returning_participants).toBe(0); // nobody was active the week before that
+        expect(current.in_progress).toBe(true);
+        expect(previous.in_progress).toBe(false);
+      });
+
+      it('187. weekly-goal completion uses each member\'s own goal and workout count; many workouts still count a member once', async () => {
+        const last = mondayOf(-1);
+        await admin.from('profiles').update({ weekly_goal: 2 }).eq('id', C2.id);
+        await admin.from('profiles').update({ weekly_goal: 3 }).eq('id', C3.id);
+        await finishAt(C2, at(addDaysToKey(last, 1), '09:00'));
+        await finishAt(C2, at(addDaysToKey(last, 1), '19:00')); // same day: still two workouts toward the goal
+        await finishAt(C2, at(addDaysToKey(last, 2), '12:00'));
+        await finishAt(C3, at(addDaysToKey(last, 1), '12:00'));
+        await finishAt(C3, at(addDaysToKey(last, 3), '12:00')); // two of three
+        const row = await weekRow(-1);
+        expect(row.active_participants).toBe(2); // C2 once, despite three workouts
+        expect(row.goal_reached_members).toBe(1); // C2 (goal 2) yes, C3 (goal 3) not yet
+      });
+
+      it('188. members who do not share their activity, and members who left, are not counted — and the gap is visible', async () => {
+        const last = mondayOf(-1);
+        await finishAt(C2, at(addDaysToKey(last, 1), '12:00'));
+        await finishAt(C3, at(addDaysToKey(last, 2), '12:00'));
+        let row = await weekRow(-1);
+        expect(row).toMatchObject({ active_participants: 2, member_count: 3, counted_members: 3 });
+
+        await admin.from('privacy_settings').upsert({ user_id: C2.id, activity_feed_opt_in: false });
+        row = await weekRow(-1);
+        expect(row).toMatchObject({ active_participants: 1, member_count: 3, counted_members: 2 });
+        await admin.from('privacy_settings').upsert({ user_id: C2.id, activity_feed_opt_in: true });
+
+        await admin.from('team_members').delete().eq('team_id', cTeamId).eq('user_id', C3.id);
+        row = await weekRow(-1);
+        expect(row).toMatchObject({ active_participants: 1, member_count: 2, counted_members: 2 });
+        await admin.from('team_members').insert({ team_id: cTeamId, user_id: C3.id, role: 'member' });
+        expect((await weekRow(-1)).active_participants).toBe(2);
+      });
+
+      it('189. a supported workout is one a teammate reacted to or replied to — counted once, in the workout\'s own week, never for self-reactions, departed people or deleted events', async () => {
+        const last = mondayOf(-1);
+        const w1 = await finishAt(C2, at(addDaysToKey(last, 1), '12:00'));
+        const w2 = await finishAt(C2, at(addDaysToKey(last, 2), '12:00'));
+        const w3 = await finishAt(C3, at(addDaysToKey(last, 3), '12:00'));
+        const [e1, e2, e3] = [await eventOf(w1), await eventOf(w2), await eventOf(w3)];
+        const supported = async () => (await weekRow(-1)).supported_workouts;
+        expect(await supported()).toBe(0);
+
+        const react = (messageId: string, who: { id: string }, type = 'heart') =>
+          admin.from('message_reactions').insert({ message_id: messageId, team_id: cTeamId, user_id: who.id, reaction_type: type });
+        await react(e1, C2); // the owner reacting to their own workout does not count
+        expect(await supported()).toBe(0);
+        await react(e1, C3); // a teammate does
+        expect(await supported()).toBe(1);
+        await react(e1, C1); // a second supporter of the SAME workout is not a second supported workout
+        await react(e1, C3, 'fire');
+        expect(await supported()).toBe(1);
+
+        const reply = (parent: string, who: { id: string }, extra: Record<string, unknown> = {}) =>
+          admin.from('messages').insert({ team_id: cTeamId, user_id: who.id, content: 'stark!', message_type: 'text', parent_message_id: parent, ...extra }).select('id').single();
+        const r2 = await reply(e2, C3); // a text reply counts too
+        expect(await supported()).toBe(2);
+        await admin.from('messages').update({ deleted_at: new Date().toISOString() }).eq('id', r2.data!.id); // ...until it is deleted
+        expect(await supported()).toBe(1);
+        await reply(e3, C3); // the owner replying to their own workout does not count
+        await reply(e3, C3, { content: 'x' });
+        expect(await supported()).toBe(1);
+
+        await react(e3, outsider); // someone who is not (or no longer) in the team does not count
+        expect(await supported()).toBe(1);
+        await admin.from('messages').update({ deleted_at: new Date().toISOString() }).eq('id', e1); // a deleted event drops out
+        expect(await supported()).toBe(0);
+
+        expect((await weekRow(0)).supported_workouts).toBe(0); // bucketed by the workout's week, not by when anyone reacted
+      });
+
+      it('190. missions, duels and invitations are counted per start week — duel outcomes and invitation answers are not exposed', async () => {
+        const thisMonday = mondayOf(0);
+        const lastMonday = mondayOf(-1);
+        // Missions: one reached, one cancelled, one not reached — all starting last week.
+        const mission = (over: Record<string, unknown>) =>
+          admin.from('team_missions').insert({ team_id: cTeamId, title: 'M', target_days: 1, starts_at: lastMonday, ends_at: addDaysToKey(lastMonday, 6), created_by: C1.id, ...over });
+        await mission({ title: 'erreicht' });
+        await mission({ title: 'abgebrochen', target_days: 50, cancelled_at: new Date().toISOString() });
+        await mission({ title: 'offen', target_days: 50 });
+        await finishAt(C2, at(addDaysToKey(lastMonday, 1), '12:00'));
+        // Duels: one accepted-and-finished, one accepted-then-cancelled, one never accepted — all starting last week.
+        const duel = (over: Record<string, unknown>) =>
+          admin.from('team_duels').insert({
+            team_id: cTeamId, inviter_id: C2.id, invitee_id: C3.id, target_days: 3, starts_on: lastMonday, ends_on: addDaysToKey(lastMonday, 6),
+            expires_at: new Date(Date.now() + 86_400_000).toISOString(), ...over,
+          });
+        await duel({ status: 'accepted', responded_at: new Date().toISOString() });
+        await duel({ status: 'cancelled', responded_at: new Date().toISOString(), cancelled_by: C2.id });
+        await duel({ status: 'declined', responded_at: new Date().toISOString() });
+        await duel({ status: 'pending' });
+        // Invitations created now (this week).
+        await C2.client.rpc('publish_training_invite', { p_invite_id: crypto.randomUUID(), p_team_id: cTeamId, p_title: 'Zählt', p_starts_at: new Date(Date.now() + 30 * 3_600_000).toISOString(), p_activity_type: null, p_place: null, p_note: null, p_plan_share_id: null });
+
+        const last = await weekRow(-1);
+        expect(last).toMatchObject({ missions_started: 3, missions_reached: 1, missions_cancelled: 1, duels_accepted: 2, duels_finished: 1 });
+        const current = await weekRow(0);
+        expect(current.training_invites_created).toBeGreaterThanOrEqual(1);
+        expect(thisMonday).not.toBe(lastMonday);
+
+        // A participant leaving the team takes the duel out of the numbers.
+        await admin.from('team_members').delete().eq('team_id', cTeamId).eq('user_id', C3.id);
+        expect((await weekRow(-1)).duels_accepted).toBe(0);
+        await admin.from('team_members').insert({ team_id: cTeamId, user_id: C3.id, role: 'member' });
+      });
+
+      it('191. an empty team answers with zeros, and reading the summary writes nothing', async () => {
+        const { data: team } = await admin.from('teams').insert({ name: `Empty Eval ${Date.now()}`, slug: `empty-eval-${Date.now()}` }).select('id').single();
+        const E = await createTestUser('c-empty-admin');
+        await admin.from('team_members').insert({ team_id: team!.id, user_id: E.id, role: 'team_admin' });
+        const res = await E.client.rpc('get_team_engagement_summary', { p_team_id: team!.id, p_weeks: 3 });
+        expect(res.error).toBeNull();
+        for (const row of res.data as Record<string, number | boolean | string>[]) {
+          expect(row).toMatchObject({ member_count: 1, counted_members: 1, active_participants: 0, returning_participants: 0, supported_workouts: 0, goal_reached_members: 0, missions_started: 0, duels_accepted: 0, training_invites_created: 0 });
+        }
+
+        const count = async (table: string) => (await admin.from(table).select('id', { count: 'exact', head: true }).eq('team_id', cTeamId)).count;
+        const before = [await count('messages'), await count('audit_events'), await count('activity_feed')];
+        await summary(C1, 8);
+        expect([await count('messages'), await count('audit_events'), await count('activity_feed')]).toEqual(before);
+
+        await admin.from('teams').delete().eq('id', team!.id);
+        await admin.auth.admin.deleteUser(E.id).catch(() => undefined);
+      });
+    });
   });
 });
