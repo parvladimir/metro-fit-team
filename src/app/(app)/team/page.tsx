@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import clsx from 'clsx';
-import { QrCode, MessageCircle, Trophy, ChevronRight, Users, AtSign, Layers } from 'lucide-react';
+import { QrCode, MessageCircle, Trophy, ChevronRight, Users, AtSign, Layers, Target } from 'lucide-react';
 import { requireAuthUser, getCurrentProfile, getPrimaryTeamMembership } from '@/lib/data/profile';
 import { getTeamRankingWithProfiles, getTeamRankingRules, isUnrankedTie, type RankingPeriod } from '@/lib/data/team';
 import { PointsRulesSheet } from '@/components/team/PointsRulesSheet';
@@ -96,6 +96,10 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
         <Link href="/team/geteilte-vorlagen" className={ACTION_BTN}>
           <Layers size={18} strokeWidth={2} className="shrink-0 text-brand" />
           <span>Geteilte Vorlagen</span>
+        </Link>
+        <Link href="/team/mission" className={ACTION_BTN}>
+          <Target size={18} strokeWidth={2} className="shrink-0 text-accent-challenge" />
+          <span>Wochenmission</span>
         </Link>
       </div>
 
