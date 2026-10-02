@@ -296,6 +296,9 @@ export function ChatRoom({
             // message's metadata from its very first INSERT.
             const inviteHintId = typeof row.metadata?.training_invite_id === 'string' ? row.metadata.training_invite_id : null;
             if (!alreadyHave && inviteHintId) await fetchInvite(inviteHintId, row.id);
+            // A photo (or a message from the same person's other device) only arrives here: it is still the
+            // reader's own message, so follow it like a text they just sent.
+            if (row.user_id === currentUserId && row.message_type !== 'system') isNearBottomRef.current = true;
             // The sender already added the persisted row from the server response —
             // the message id is the source of truth, so never add it twice.
             setMessages((prev) =>
@@ -441,8 +444,11 @@ export function ChatRoom({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusMessageId]);
 
-  /** Adds a message exactly as the server stored it (id = source of truth). */
+  /** Adds a message exactly as the server stored it (id = source of truth). Only ever the sender's own message. */
   function addPersisted(message: ChatMessage, mentions: MessageMention[]) {
+    // Whoever sends should see it, even after scrolling up to read: the list only follows new messages while the
+    // reader is near the bottom (see the scroll effect below).
+    isNearBottomRef.current = true;
     setMessages((prev) => (prev.some((m) => m.id === message.id) ? prev : [...prev, message]));
     if (mentions.length) setMentionsMap((prev) => ({ ...prev, [message.id]: mentions }));
   }
@@ -706,6 +712,18 @@ export function ChatRoom({
     if (!el) return;
     isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_THRESHOLD_PX;
   }
+
+  // The list is the only scroller, so its height changes whenever the composer grows (a longer draft, the reply bar)
+  // or a keyboard resizes the viewport: a reader at the bottom stays at the bottom instead of losing the newest message.
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => {
+      if (isNearBottomRef.current) el.scrollTop = el.scrollHeight;
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     return () => {
