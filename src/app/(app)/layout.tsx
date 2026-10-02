@@ -6,6 +6,7 @@ import { NotificationSync } from '@/components/notifications/NotificationSync';
 import { BottomNav } from '@/components/nav/BottomNav';
 import { InstallPrompt } from '@/components/pwa/InstallPrompt';
 import { RunningWorkoutStrip } from '@/components/workout/RunningWorkoutStrip';
+import { DraftSweeper } from '@/components/workout/DraftHousekeeping';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await requireAuthUser();
@@ -27,6 +28,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       <main className="flex min-h-0 flex-1 flex-col pb-6">{children}</main>
       <NotificationSync userId={user.id} initialCount={notificationCount} />
       <InstallPrompt />
+      <DraftSweeper userId={user.id} activeWorkoutId={activeWorkout?.id ?? null} />
       <RunningWorkoutStrip workout={activeWorkout} />
       <BottomNav teamId={membership?.team_id ?? null} initialUnreadCount={unreadChatCount} />
     </div>

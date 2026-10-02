@@ -5,6 +5,7 @@ import { requireAuthUser } from '@/lib/data/profile';
 import { getWorkoutDetail, calculateVolumeKg } from '@/lib/data/workouts';
 import { formatAchieved, formatTargets, hasTargets } from '@/lib/plan-targets';
 import { WorkoutActionsMenu } from '@/components/workout/WorkoutActionsMenu';
+import { DraftCleaner } from '@/components/workout/DraftHousekeeping';
 import { ShareToTeamChatButton } from '@/components/sharing/ShareToTeamChatButton';
 import type { SharePreviewSource } from '@/components/sharing/SharePreviewSheet';
 import { createClient } from '@/lib/supabase/server';
@@ -43,6 +44,7 @@ export default async function ZusammenfassungPage({ params }: { params: Promise<
 
   return (
     <div className="screen-padding flex flex-col items-center gap-6 pb-8 text-center">
+      <DraftCleaner userId={user.id} workoutId={workout.id} />
       <div className="-mb-4 flex w-full items-center justify-end gap-2">
         <ShareToTeamChatButton teamId={workout.team_id} source={shareSource} iconOnly className="btn-icon h-10 w-10 bg-neutral-100 text-neutral-500" />
         <WorkoutActionsMenu workoutId={workout.id} />

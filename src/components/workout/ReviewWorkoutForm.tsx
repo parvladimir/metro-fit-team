@@ -28,12 +28,15 @@ function Save() {
  * state — so there is no risk of a stale confirmation surviving a duration
  * the user has since edited: the plain "Speichern" button never sends it. */
 export function ReviewWorkoutForm({
+  userId,
   workoutId,
   defaultDurationSeconds,
   defaultTime,
   pausedSeconds,
   showDistance,
 }: {
+  /** Lets the on-device set drafts of this workout be dropped when it is discarded. */
+  userId?: string;
   workoutId: string;
   defaultDurationSeconds: number;
   defaultTime: string;
@@ -91,7 +94,7 @@ export function ReviewWorkoutForm({
         <Save />
       </form>
 
-      <DiscardWorkoutButton workoutId={workoutId} label="Training verwerfen" className="btn-ghost w-full text-sm text-red-400" />
+      <DiscardWorkoutButton workoutId={workoutId} userId={userId} label="Training verwerfen" className="btn-ghost w-full text-sm text-red-400" />
     </div>
   );
 }

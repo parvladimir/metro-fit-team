@@ -4,6 +4,7 @@ import { getCurrentProfile, getPrimaryTeamMembership } from '@/lib/data/profile'
 import { getProfileStats } from '@/lib/data/stats';
 import { signOutAction } from '@/app/(auth)/actions';
 import { Avatar } from '@/components/ui/Avatar';
+import { SignOutForm } from '@/components/workout/DraftHousekeeping';
 import { t } from '@/lib/i18n';
 
 export default async function ProfilPage() {
@@ -56,9 +57,9 @@ export default async function ProfilPage() {
         {membership?.role === 'team_admin' && <MenuLink href="/team/verwalten" icon={Wrench} accent="#00D7F5" label={t('profile.teamManagement')} />}
       </div>
 
-      <form action={signOutAction}>
+      <SignOutForm userId={profile.id} action={signOutAction}>
         <button type="submit" className="btn-ghost w-full !border-white/[0.08] bg-surface-3 text-neutral-700">{t('auth.signOut')}</button>
-      </form>
+      </SignOutForm>
 
       <footer className="pb-safe-b pt-2 text-center text-xs text-neutral-500">
         <p>{t('profile.footer.credit')}</p>

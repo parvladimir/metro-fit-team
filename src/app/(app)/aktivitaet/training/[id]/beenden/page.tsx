@@ -30,6 +30,7 @@ export default async function BeendenPage({ params }: { params: Promise<{ id: st
     <div className="screen-padding flex flex-col gap-5 pb-8">
       <h1 className="text-xl font-bold text-neutral-900">{t('workout.finish')}</h1>
       <ReviewWorkoutForm
+        userId={user.id}
         workoutId={workout.id}
         defaultDurationSeconds={defaultDurationSeconds}
         defaultTime={localTimeString(pausedMoment)}

@@ -119,7 +119,11 @@ export async function addWorkoutExerciseAction(formData: FormData) {
   revalidatePath(`/aktivitaet/training/${workoutId}`);
 }
 
-export type AddSetState = { error?: string; ok?: number } | undefined;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** `replayed` = the very same entry had already been stored (a retry after a lost
+ * response, or a double tap): nothing new was written. */
+export type AddSetResult = { ok: true; setNumber: number; replayed: boolean } | { ok: false; error: string };
 
 function readNumber(formData: FormData, key: string, min: number, max: number): number | null | 'invalid' {
   const raw = String(formData.get(key) ?? '').trim().replace(',', '.');
@@ -130,21 +134,30 @@ function readNumber(formData: FormData, key: string, min: number, max: number): 
 }
 
 /** Logs one set / cardio entry. Which fields are accepted depends on the
- * exercise type (looked up server-side, never trusted from the form). */
-export async function addSetAction(_prev: AddSetState, formData: FormData): Promise<AddSetState> {
-  const workoutId = String(formData.get('workoutId'));
-  const workoutExerciseId = String(formData.get('workoutExerciseId'));
+ * exercise type (looked up server-side, never trusted from the form).
+ *
+ * `submissionId` is chosen by the client for one entry and becomes the set's id, so
+ * sending the same entry again (double tap, retry after a dropped response) can never
+ * create a second set: the second insert is recognised by its primary key and
+ * answered as already saved. */
+export async function addSetAction(formData: FormData): Promise<AddSetResult> {
+  const workoutExerciseId = String(formData.get('workoutExerciseId') ?? '');
+  const submissionId = String(formData.get('submissionId') ?? '');
+  if (!UUID_RE.test(workoutExerciseId) || !UUID_RE.test(submissionId)) return { ok: false, error: 'Ungültige Anfrage. Bitte lade die Seite neu.' };
   await requireAuthUser();
   const supabase = await createClient();
 
+  // The exercise row, its type and the state of its workout come from the database,
+  // never from hidden form fields.
   const { data: we } = await supabase
     .from('workout_exercises')
-    .select('id, exercises(exercise_type)')
+    .select('id, workout_id, exercises(exercise_type), workouts(status)')
     .eq('id', workoutExerciseId)
     .maybeSingle();
-  if (!we) return { error: 'Übung nicht gefunden.' };
-  const rawType = (we as unknown as { exercises: { exercise_type: ExerciseType } }).exercises.exercise_type;
-  const type = normalizeExerciseType(rawType);
+  if (!we) return { ok: false, error: 'Diese Übung gibt es in diesem Training nicht mehr. Bitte lade die Seite neu.' };
+  const row = we as unknown as { workout_id: string; exercises: { exercise_type: ExerciseType }; workouts: { status: string } | null };
+  if (row.workouts?.status !== 'laeuft') return { ok: false, error: 'Dieses Training ist bereits beendet.' };
+  const type = normalizeExerciseType(row.exercises.exercise_type);
 
   const fields = {
     weight: readNumber(formData, 'weight', 0, 9999),
@@ -161,14 +174,14 @@ export async function addSetAction(_prev: AddSetState, formData: FormData): Prom
     work: readNumber(formData, 'workSeconds', 1, 3600),
     intervalRest: readNumber(formData, 'intervalRestSeconds', 0, 3600),
   };
-  if (Object.values(fields).includes('invalid')) return { error: 'Bitte prüfe deine Eingaben.' };
+  if (Object.values(fields).includes('invalid')) return { ok: false, error: 'Bitte prüfe deine Eingaben.' };
   const f = fields as Record<keyof typeof fields, number | null>;
 
   const durationRaw = String(formData.get('duration') || '').trim();
   let duration: number | null = null;
   if (durationRaw) {
     duration = parseDuration(durationRaw);
-    if (duration === null || duration > 24 * 3600) return { error: 'Zeit bitte als mm:ss oder h:mm:ss eingeben.' };
+    if (duration === null || duration > 24 * 3600) return { ok: false, error: 'Zeit bitte als mm:ss oder h:mm:ss eingeben.' };
   }
 
   const set: Record<string, unknown> = {};
@@ -178,32 +191,32 @@ export async function addSetAction(_prev: AddSetState, formData: FormData): Prom
   if (f.maxHr !== null) metrics.max_heart_rate = f.maxHr;
 
   if (type === 'strength') {
-    if (f.reps === null || f.weight === null) return { error: 'Gewicht und Wiederholungen sind nötig.' };
+    if (f.reps === null || f.weight === null) return { ok: false, error: 'Gewicht und Wiederholungen sind nötig.' };
     set.weight_kg = f.weight;
     set.reps = f.reps;
     if (f.rpe !== null) metrics.rpe = f.rpe;
     if (f.rest !== null) metrics.rest_seconds = f.rest;
   } else if (type === 'bodyweight') {
-    if (f.reps === null && duration === null) return { error: 'Wiederholungen oder Dauer angeben.' };
+    if (f.reps === null && duration === null) return { ok: false, error: 'Wiederholungen oder Dauer angeben.' };
     set.reps = f.reps;
     set.duration_seconds = duration;
     set.weight_kg = f.weight; // optional Zusatzgewicht
     if (f.rpe !== null) metrics.rpe = f.rpe;
   } else if (type === 'cardio_distance') {
-    if (duration === null && f.distance === null) return { error: 'Zeit oder Distanz angeben.' };
+    if (duration === null && f.distance === null) return { ok: false, error: 'Zeit oder Distanz angeben.' };
     set.duration_seconds = duration;
     set.distance_km = f.distance;
     if (f.elevation !== null) metrics.elevation_gain_m = f.elevation;
     if (f.incline !== null) metrics.incline_pct = f.incline;
   } else if (type === 'interval') {
-    if (f.rounds === null || f.work === null) return { error: 'Runden und Belastungszeit angeben.' };
+    if (f.rounds === null || f.work === null) return { ok: false, error: 'Runden und Belastungszeit angeben.' };
     metrics.rounds = f.rounds;
     metrics.work_seconds = f.work;
     if (f.intervalRest !== null) metrics.interval_rest_seconds = f.intervalRest;
     set.duration_seconds = duration ?? f.rounds * (f.work + (f.intervalRest ?? 0));
   } else {
     // cardio_time, mobility, sport, other
-    if (duration === null) return { error: 'Bitte eine Dauer angeben.' };
+    if (duration === null) return { ok: false, error: 'Bitte eine Dauer angeben.' };
     set.duration_seconds = duration;
   }
 
@@ -213,18 +226,31 @@ export async function addSetAction(_prev: AddSetState, formData: FormData): Prom
     .from('workout_sets')
     .select('id', { count: 'exact', head: true })
     .eq('workout_exercise_id', workoutExerciseId);
+  const setNumber = (count ?? 0) + 1;
 
   const { error } = await supabase.from('workout_sets').insert({
+    id: submissionId,
     workout_exercise_id: workoutExerciseId,
-    set_number: (count ?? 0) + 1,
+    set_number: setNumber,
     metrics,
     notes,
     ...set,
   });
-  if (error) return { error: 'Eintrag konnte nicht gespeichert werden.' };
+  if (error) {
+    if (error.code === '23505') {
+      // This entry was already stored — answer with the stored one instead of writing it twice.
+      const { data: existing } = await supabase.from('workout_sets').select('set_number, workout_exercise_id').eq('id', submissionId).maybeSingle();
+      if (existing && existing.workout_exercise_id === workoutExerciseId) {
+        revalidatePath(`/aktivitaet/training/${row.workout_id}`);
+        return { ok: true, setNumber: existing.set_number, replayed: true };
+      }
+    }
+    if (error.code === '23503') return { ok: false, error: 'Diese Übung gibt es in diesem Training nicht mehr. Bitte lade die Seite neu.' };
+    return { ok: false, error: 'Eintrag konnte nicht gespeichert werden.' };
+  }
 
-  revalidatePath(`/aktivitaet/training/${workoutId}`);
-  return { ok: Date.now() };
+  revalidatePath(`/aktivitaet/training/${row.workout_id}`);
+  return { ok: true, setNumber, replayed: false };
 }
 
 export async function deleteSetAction(setId: string, workoutId: string) {

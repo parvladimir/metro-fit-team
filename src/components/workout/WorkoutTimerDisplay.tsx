@@ -22,7 +22,11 @@ export function WorkoutTimerDisplay({
 
   return (
     <div className="card items-center gap-1 !py-5 text-center">
-      <p className={`metric-number text-4xl tabular-nums ${color}`}>{formatDuration(elapsed)}</p>
+      {/* The server renders the time of the request, the browser the time of hydration: a second apart,
+          which made React discard the server HTML of the whole screen on every load. The tick fixes it up. */}
+      <p className={`metric-number text-4xl tabular-nums ${color}`} suppressHydrationWarning>
+        {formatDuration(elapsed)}
+      </p>
       <p className="text-xs font-semibold text-neutral-400">{pausedAt ? 'Pausiert' : 'Läuft'}</p>
     </div>
   );

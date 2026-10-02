@@ -47,7 +47,9 @@ export async function getWorkoutDetail(workoutId: string): Promise<WorkoutDetail
     .from('workout_exercises')
     .select('*, exercises(*), workout_sets(*)')
     .eq('workout_id', workoutId)
-    .order('position', { ascending: true });
+    .order('position', { ascending: true })
+    .order('created_at', { ascending: true })
+    .order('id', { ascending: true });
 
   const workoutExercises: WorkoutExerciseWithSets[] = (exercises ?? []).map((row) => {
     const r = row as unknown as WorkoutExercise & { exercises: Exercise; workout_sets: WorkoutSet[] };
