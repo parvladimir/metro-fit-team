@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { LastResultState } from '@/lib/exercise-history';
-import { readDraft } from '@/lib/workout-drafts';
+import { markWorkoutEnded, readDraft, unmarkWorkoutEnded } from '@/lib/workout-drafts';
 
 const addSetAction = vi.fn();
 vi.mock('@/app/(app)/aktivitaet/actions', () => ({ addSetAction: (fd: FormData) => addSetAction(fd) }));
@@ -105,6 +105,7 @@ afterEach(() => {
   container.remove();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  unmarkWorkoutEnded('workout-1');
 });
 
 describe('SetLogger — suggestions and copying', () => {
@@ -394,6 +395,7 @@ describe('SetLogger — drafts on this device', () => {
     act(() => vi.advanceTimersByTime(500));
     expect(readDraft(scope, 'ex-bench', Date.now()).status).toBe('ok');
     click(buttonByText('Entwurf verwerfen'));
+    click(buttonByText('Wirklich verwerfen?')); // one tap asks, the second discards
     expect(readDraft(scope, 'ex-bench', Date.now()).status).toBe('none');
     expect(input('weight').value).toBe('82,5'); // back to the suggestion from the saved set
   });
@@ -411,3 +413,144 @@ describe('SetLogger — drafts on this device', () => {
     spy.mockRestore();
   });
 });
+
+describe('SetLogger — what the review found', () => {
+  it('input typed while a save is still running is the next entry and is never replaced by the suggestion from the one just saved', async () => {
+    let resolve!: (v: unknown) => void;
+    addSetAction.mockReturnValue(new Promise((r) => (resolve = r)));
+    render();
+    type(input('weight'), '80');
+    type(input('reps'), '10');
+    await submit();
+    // the inputs are still editable while the request is in flight
+    type(input('weight'), '85');
+    type(input('reps'), '8');
+    await act(async () => {
+      resolve({ ok: true, setNumber: 1, replayed: false });
+      await Promise.resolve();
+    });
+    await flush();
+    expect(input('weight').value).toBe('85');
+    expect(input('reps').value).toBe('8');
+    expect(submitButton().textContent).toContain('Satz 2 speichern'); // the number still moved, only after the server confirmed
+    expect(container.textContent).toContain('Satz 1 gespeichert.');
+  });
+
+  it('…while an untouched form still gets the suggestion', async () => {
+    addSetAction.mockResolvedValue({ ok: true, setNumber: 1, replayed: false });
+    render();
+    type(input('weight'), '80');
+    type(input('reps'), '10');
+    await submit();
+    expect(input('weight').value).toBe('80');
+  });
+
+  it('the set number follows the saved list: after a set was deleted it goes back down', async () => {
+    addSetAction.mockResolvedValue({ ok: true, setNumber: 4, replayed: false });
+    render({ savedSets: [set(), set({ set_number: 2 }), set({ set_number: 3 })] });
+    type(input('weight'), '80');
+    type(input('reps'), '10');
+    await submit();
+    expect(submitButton().textContent).toContain('Satz 5 speichern'); // confirmed: 4 saved, the next is 5 (before the refreshed list arrives)
+    render({ savedSets: [set(), set({ set_number: 2 }), set({ set_number: 3 }), set({ set_number: 4 })] });
+    expect(submitButton().textContent).toContain('Satz 5 speichern');
+    render({ savedSets: [set(), set({ set_number: 2 })] }); // two of them were deleted
+    expect(submitButton().textContent).toContain('Satz 3 speichern');
+  });
+
+  it('a retry that carries different values than the first try says the stored entry kept the first ones', async () => {
+    addSetAction.mockRejectedValueOnce(new Error('network')).mockResolvedValueOnce({ ok: true, setNumber: 1, replayed: true });
+    render();
+    type(input('weight'), '80');
+    type(input('reps'), '10');
+    await submit();
+    type(input('weight'), '82,5'); // the user corrects the value and tries again
+    await submit();
+    expect(container.textContent).toContain('war schon mit den ursprünglichen Werten gespeichert');
+    expect(container.textContent).toContain('deine Änderung wurde nicht übernommen');
+  });
+
+  it('a retry with the SAME values just says it was already stored', async () => {
+    addSetAction.mockRejectedValueOnce(new Error('network')).mockResolvedValueOnce({ ok: true, setNumber: 1, replayed: true });
+    render();
+    type(input('weight'), '80');
+    type(input('reps'), '10');
+    await submit();
+    await submit();
+    expect(container.textContent).toContain('Dieser Eintrag war bereits gespeichert.');
+    expect(container.textContent).not.toContain('Änderung wurde nicht übernommen');
+  });
+
+  it('a restored draft keeps its "wiederhergestellt" note and its time stamp — restoring is not an edit', () => {
+    vi.useFakeTimers();
+    render();
+    type(input('weight'), '82,5');
+    act(() => vi.advanceTimersByTime(500));
+    act(() => root.unmount()); // leaving the screen flushes the draft one last time
+    const key = storage.key(0)!;
+    const stampedAt = JSON.parse(storage.getItem(key)!).t as number;
+    root = createRoot(container);
+    vi.setSystemTime(Date.now() + 3 * 3_600_000); // three hours later
+    render();
+    expect(container.textContent).toContain('Entwurf wiederhergestellt – noch nicht gespeichert.');
+    act(() => vi.advanceTimersByTime(1000));
+    expect(container.textContent).toContain('Entwurf wiederhergestellt – noch nicht gespeichert.'); // not flipped to "gespeichert"
+    expect(JSON.parse(storage.getItem(key)!).t).toBe(stampedAt); // still the original stamp: the 24 h clock did not restart
+    type(input('weight'), '90'); // a real edit is written again
+    act(() => vi.advanceTimersByTime(500));
+    expect(JSON.parse(storage.getItem(key)!).t).toBeGreaterThan(stampedAt);
+  });
+
+  it('a workout that was just ended gets no draft written back by its unmounting form', () => {
+    vi.useFakeTimers();
+    render();
+    type(input('weight'), '82,5');
+    markWorkoutEnded('workout-1'); // finish / skip / discard cleared everything and marked it
+    storage.clear();
+    act(() => root.unmount()); // the leave-the-screen flush
+    expect(storage.length).toBe(0);
+    root = createRoot(container);
+  });
+
+  it('"Entwurf verwerfen" asks once more before it costs typed input, and the question goes away by itself', () => {
+    vi.useFakeTimers();
+    render();
+    type(input('weight'), '82,5');
+    act(() => vi.advanceTimersByTime(500));
+    click(buttonByText('Entwurf verwerfen'));
+    expect(input('weight').value).toBe('82,5'); // one tap only asks
+    expect(buttonByText('Wirklich verwerfen?')).toBeTruthy();
+    act(() => vi.advanceTimersByTime(4500));
+    expect(buttonByText('Entwurf verwerfen')).toBeTruthy(); // asked and forgotten
+    click(buttonByText('Entwurf verwerfen'));
+    click(buttonByText('Wirklich verwerfen?'));
+    expect(input('weight').value).toBe('');
+  });
+
+  it('the save button stays focusable while a save runs (so focus is not lost) and a second tap does nothing', async () => {
+    let resolve!: (v: unknown) => void;
+    addSetAction.mockReturnValue(new Promise((r) => (resolve = r)));
+    render();
+    type(input('weight'), '80');
+    type(input('reps'), '10');
+    await submit();
+    // never the `disabled` attribute (which would drop focus); the pending look is aria-disabled, which Next's React
+    // sets while the action runs — the stable React used by these tests does not track async transitions.
+    expect(submitButton().disabled).toBe(false);
+    expect(submitButton().hasAttribute('aria-disabled')).toBe(true);
+    await act(async () => {
+      resolve({ ok: true, setNumber: 1, replayed: false });
+      await Promise.resolve();
+    });
+    await flush();
+    expect(submitButton().disabled).toBe(false);
+  });
+
+  it('the question about replacing typed input starts on the safe answer', () => {
+    render({ lastResult: last([{ weight_kg: 80, reps: 10 }]) });
+    type(input('weight'), '92,5');
+    click(buttonByText('Werte übernehmen'));
+    expect(document.activeElement).toBe(buttonByText('Behalten'));
+  });
+});
+

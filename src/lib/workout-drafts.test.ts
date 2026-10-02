@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { clearDraft, clearDraftsForUser, clearDraftsForWorkout, draftKey, DRAFT_TTL_MS, readDraft, sweepDrafts, writeDraft, type DraftScope } from './workout-drafts';
+import { afterEach, describe, expect, it } from 'vitest';
+import { clearDraft, clearDraftsForUser, clearDraftsForWorkout, draftKey, DRAFT_TTL_MS, isWorkoutEnded, markWorkoutEnded, readDraft, sweepDrafts, unmarkWorkoutEnded, writeDraft, type DraftScope } from './workout-drafts';
 
 /** A minimal in-memory Storage. */
 class MemoryStorage implements Storage {
@@ -22,6 +22,11 @@ class BrokenStorage extends MemoryStorage {
 
 const scope = (over: Partial<DraftScope> = {}): DraftScope => ({ userId: 'u1', workoutId: 'w1', workoutExerciseId: 'we1', type: 'strength', ...over });
 const NOW = 1_800_000_000_000;
+
+// "Ended" is remembered per page load; the tests must not pass it on to each other.
+afterEach(() => {
+  for (const id of ['w1', 'w2', 'w-old']) unmarkWorkoutEnded(id);
+});
 
 describe('draft scope', () => {
   it('is bound to user, workout, workout-exercise row and input mode', () => {
@@ -159,3 +164,38 @@ describe('housekeeping sweep', () => {
     expect(st.length).toBe(0);
   });
 });
+
+describe('a workout that has just ended', () => {
+  it('clearing its drafts also stops forms that are still on screen from writing them back', () => {
+    const st = new MemoryStorage();
+    writeDraft(scope(), 'ex1', { values: { weight: '80' } }, NOW, st);
+    clearDraftsForWorkout('u1', 'w1', st);
+    expect(isWorkoutEnded('w1')).toBe(true);
+    // the unmounting form's last flush
+    expect(writeDraft(scope(), 'ex1', { values: { weight: '80' } }, NOW + 5, st)).toBe(false);
+    expect(readDraft(scope(), 'ex1', NOW + 10, st).status).toBe('none');
+    // another workout is not affected
+    expect(writeDraft(scope({ workoutId: 'w2' }), 'ex1', { values: { weight: '60' } }, NOW, st)).toBe(true);
+  });
+
+  it('if ending failed and the workout goes on, its drafts can be written again', () => {
+    const st = new MemoryStorage();
+    markWorkoutEnded('w1');
+    expect(writeDraft(scope(), 'ex1', { values: { weight: '80' } }, NOW, st)).toBe(false);
+    unmarkWorkoutEnded('w1');
+    expect(writeDraft(scope(), 'ex1', { values: { weight: '80' } }, NOW, st)).toBe(true);
+  });
+});
+
+describe('housekeeping when the running workout could not be looked up', () => {
+  it('keeps the workout drafts (a failed lookup is not "no workout") but still drops other accounts and expired ones', () => {
+    const st = new MemoryStorage();
+    writeDraft(scope(), 'ex1', { values: { weight: '80' } }, NOW, st); // fresh, this user
+    writeDraft(scope({ workoutExerciseId: 'we2' }), 'ex2', { values: { reps: '10' } }, NOW - DRAFT_TTL_MS - 5000, st); // expired
+    writeDraft(scope({ userId: 'someone-else' }), 'ex1', { values: { weight: '50' } }, NOW, st);
+    expect(sweepDrafts({ userId: 'u1', activeWorkoutId: undefined, now: NOW }, st)).toBe(2); // the other account's and the expired one
+    expect(readDraft(scope(), 'ex1', NOW, st).status).toBe('ok');
+    expect(st.length).toBe(1);
+  });
+});
+

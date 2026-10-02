@@ -85,12 +85,20 @@ describe('getExerciseHistory', () => {
     ...over,
   });
 
-  it('requests one bounded page and says whether more may follow', async () => {
-    rpc.mockResolvedValue({ data: [1, 2, 3, 4, 5].map((n) => hrow(n)), error: null });
+  it('asks for one workout more than it shows, so "there is more" is known exactly', async () => {
+    rpc.mockResolvedValue({ data: [1, 2, 3, 4, 5, 6].map((n) => hrow(n)), error: null });
     const res = await getExerciseHistory('ex-1', 'w-current', null);
-    expect(rpc).toHaveBeenCalledWith('get_exercise_history', { p_exercise_id: 'ex-1', p_exclude_workout_id: 'w-current', p_limit: HISTORY_PAGE_SIZE, p_before: null });
+    expect(rpc).toHaveBeenCalledWith('get_exercise_history', { p_exercise_id: 'ex-1', p_exclude_workout_id: 'w-current', p_limit: HISTORY_PAGE_SIZE + 1, p_before: null });
     expect(res).toMatchObject({ status: 'ok', hasMore: true });
-    if (res.status === 'ok') expect(res.entries).toHaveLength(5);
+    if (res.status === 'ok') {
+      expect(res.entries).toHaveLength(5); // the extra workout is only the proof that more exist
+      expect(res.entries.map((e) => e.workoutId)).toEqual(['w-1', 'w-2', 'w-3', 'w-4', 'w-5']);
+    }
+  });
+
+  it('exactly one full page is the end of the history — no empty "load more"', async () => {
+    rpc.mockResolvedValue({ data: [1, 2, 3, 4, 5].map((n) => hrow(n)), error: null });
+    expect(await getExerciseHistory('ex-1', null, null)).toMatchObject({ status: 'ok', hasMore: false });
   });
 
   it('a short page is the end of the history', async () => {

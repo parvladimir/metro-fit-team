@@ -157,3 +157,43 @@ describe('addSetAction — validation per type is unchanged', () => {
     expect(inserts[0]!.row).toMatchObject({ duration_seconds: 480, metrics: { rounds: 8, work_seconds: 40, interval_rest_seconds: 20 } });
   });
 });
+
+describe('addSetAction — screens opened before this version', () => {
+  it('a workout tab from before the update still calls it as (previousState, formData) and still saves', async () => {
+    const legacy = form({ workoutExerciseId: WE, weight: '80', reps: '10', workoutId: 'ignored' }); // no entry id in the old form
+    const res = await addSetAction(undefined, legacy);
+    expect(res).toMatchObject({ ok: true, setNumber: 3, replayed: false });
+    expect(String(inserts[0]!.row.id)).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i); // the server makes one
+    // the old client reads `ok` (truthy) and `error`: both are still there
+    expect(res.ok).toBe(true);
+    expect(await addSetAction(undefined, form({ workoutExerciseId: WE, reps: '10' }))).toMatchObject({ ok: false, error: 'Gewicht und Wiederholungen sind nötig.' });
+  });
+
+  it('a current client without an entry id is refused — only an old one is allowed to omit it', async () => {
+    expect(await addSetAction(form({ workoutExerciseId: WE, weight: '80', reps: '10' }))).toMatchObject({ ok: false });
+    expect(inserts).toHaveLength(0);
+  });
+
+  it('anything that is not a form is refused', async () => {
+    expect(await addSetAction({ weight: '80' })).toMatchObject({ ok: false });
+    expect(await addSetAction(undefined, 'nope')).toMatchObject({ ok: false });
+  });
+});
+
+describe('addSetAction — a retry that arrives after the workout was finished', () => {
+  it('answers "already saved" when this very entry is stored, instead of claiming the workout ended', async () => {
+    script.exercise = { workout_id: WORKOUT, exercises: { exercise_type: 'strength' }, workouts: { status: 'abgeschlossen' } };
+    script.existing = { set_number: 3, workout_exercise_id: WE };
+    expect(await addSetAction(strength())).toEqual({ ok: true, setNumber: 3, replayed: true });
+    expect(inserts).toHaveLength(0);
+  });
+
+  it('but another exercise\'s set with that id does not count, and an unknown entry is still refused', async () => {
+    script.exercise = { workout_id: WORKOUT, exercises: { exercise_type: 'strength' }, workouts: { status: 'abgeschlossen' } };
+    script.existing = { set_number: 3, workout_exercise_id: '44444444-4444-4444-8444-444444444444' };
+    expect(await addSetAction(strength())).toEqual({ ok: false, error: 'Dieses Training ist bereits beendet.' });
+    script.existing = null;
+    expect(await addSetAction(strength())).toEqual({ ok: false, error: 'Dieses Training ist bereits beendet.' });
+  });
+});
+

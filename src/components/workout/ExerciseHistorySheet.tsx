@@ -28,6 +28,7 @@ export function ExerciseHistorySheet({
   const [hasMore, setHasMore] = useState(false);
   const [status, setStatus] = useState<'loading' | 'ok' | 'error'>('loading');
   const [loadingMore, setLoadingMore] = useState(false);
+  const [moreFailed, setMoreFailed] = useState(false);
   // Only the newest request may change what is shown (a slow answer must not replace a newer one).
   const requestRef = useRef(0);
 
@@ -36,18 +37,23 @@ export function ExerciseHistorySheet({
       const request = ++requestRef.current;
       if (before) setLoadingMore(true);
       else setStatus('loading');
+      setMoreFailed(false);
       try {
         const res = await loadExerciseHistoryAction({ exerciseId, excludeWorkoutId: workoutId, before });
         if (request !== requestRef.current) return;
         if (!res.ok) {
           setStatus(before ? 'ok' : 'error');
+          if (before) setMoreFailed(true);
           return;
         }
         setEntries((prev) => (before ? [...prev, ...res.entries] : res.entries));
         setHasMore(res.hasMore);
         setStatus('ok');
       } catch {
-        if (request === requestRef.current && !before) setStatus('error');
+        if (request === requestRef.current) {
+          if (before) setMoreFailed(true);
+          else setStatus('error');
+        }
       } finally {
         if (request === requestRef.current) setLoadingMore(false);
       }
@@ -109,6 +115,12 @@ export function ExerciseHistorySheet({
         </ol>
       )}
 
+      {status === 'ok' && moreFailed && (
+        <p className="mt-3 text-center text-sm text-neutral-500" role="alert">
+          Ältere Einträge konnten nicht geladen werden.
+        </p>
+      )}
+
       {status === 'ok' && hasMore && (
         <button
           type="button"
@@ -116,7 +128,7 @@ export function ExerciseHistorySheet({
           onClick={() => void load(entries[entries.length - 1]?.performedAt ?? null)}
           className="btn-secondary mt-3 min-h-[44px] w-full text-sm"
         >
-          {loadingMore ? 'Wird geladen…' : 'Ältere Einträge laden'}
+          {loadingMore ? 'Wird geladen…' : moreFailed ? 'Erneut versuchen' : 'Ältere Einträge laden'}
         </button>
       )}
     </Sheet>

@@ -140,9 +140,15 @@ function readNumber(formData: FormData, key: string, min: number, max: number): 
  * sending the same entry again (double tap, retry after a dropped response) can never
  * create a second set: the second insert is recognised by its primary key and
  * answered as already saved. */
-export async function addSetAction(formData: FormData): Promise<AddSetResult> {
+export async function addSetAction(first: unknown, second?: unknown): Promise<AddSetResult> {
+  // A workout screen that was opened before this version was deployed still calls this as (previousState, formData)
+  // and has no entry id: it keeps working (without the retry protection it never had) until it is reloaded.
+  const legacy = second instanceof FormData;
+  const formData = legacy ? second : first;
+  if (!(formData instanceof FormData)) return { ok: false, error: 'Ungültige Anfrage. Bitte lade die Seite neu.' };
   const workoutExerciseId = String(formData.get('workoutExerciseId') ?? '');
-  const submissionId = String(formData.get('submissionId') ?? '');
+  const sentId = String(formData.get('submissionId') ?? '');
+  const submissionId = UUID_RE.test(sentId) ? sentId : legacy ? crypto.randomUUID() : '';
   if (!UUID_RE.test(workoutExerciseId) || !UUID_RE.test(submissionId)) return { ok: false, error: 'Ungültige Anfrage. Bitte lade die Seite neu.' };
   await requireAuthUser();
   const supabase = await createClient();
@@ -156,7 +162,12 @@ export async function addSetAction(formData: FormData): Promise<AddSetResult> {
     .maybeSingle();
   if (!we) return { ok: false, error: 'Diese Übung gibt es in diesem Training nicht mehr. Bitte lade die Seite neu.' };
   const row = we as unknown as { workout_id: string; exercises: { exercise_type: ExerciseType }; workouts: { status: string } | null };
-  if (row.workouts?.status !== 'laeuft') return { ok: false, error: 'Dieses Training ist bereits beendet.' };
+  if (row.workouts?.status !== 'laeuft') {
+    // A retry that arrives after the workout was finished: if this very entry was stored before, say so.
+    const { data: stored } = await supabase.from('workout_sets').select('set_number, workout_exercise_id').eq('id', submissionId).maybeSingle();
+    if (stored && stored.workout_exercise_id === workoutExerciseId) return { ok: true, setNumber: stored.set_number, replayed: true };
+    return { ok: false, error: 'Dieses Training ist bereits beendet.' };
+  }
   const type = normalizeExerciseType(row.exercises.exercise_type);
 
   const fields = {

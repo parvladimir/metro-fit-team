@@ -6,9 +6,10 @@ import { clearDraftsForUser, clearDraftsForWorkout, sweepDrafts } from '@/lib/wo
 /**
  * Keeps the on-device set drafts honest. Mounted once in the signed-in shell: removes
  * drafts that belong to another account, that expired, or that belong to a workout that
- * is not the user's running one any more (finished, skipped or discarded).
+ * is not the user's running one any more (finished, skipped or discarded). When the lookup of
+ * the running workout failed (`undefined`) it leaves workout drafts alone.
  */
-export function DraftSweeper({ userId, activeWorkoutId }: { userId: string; activeWorkoutId: string | null }) {
+export function DraftSweeper({ userId, activeWorkoutId }: { userId: string; activeWorkoutId: string | null | undefined }) {
   useEffect(() => {
     sweepDrafts({ userId, activeWorkoutId, now: Date.now() });
   }, [userId, activeWorkoutId]);
@@ -44,7 +45,7 @@ export function ClearDraftsForm({
   );
 }
 
-/** The sign-out form: nothing typed by this account stays on the device. */
+/** A form that clears everything this account typed on the device when it is submitted — sign-out and deleting the account. */
 export function SignOutForm({ userId, action, className, children }: { userId: string; action: () => void | Promise<void>; className?: string; children: React.ReactNode }) {
   return (
     <form action={action} onSubmit={() => clearDraftsForUser(userId)} className={className}>

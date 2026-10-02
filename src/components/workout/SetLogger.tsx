@@ -24,7 +24,7 @@ import {
   type SetSnapshot,
 } from '@/lib/set-form';
 import { newUuid } from '@/lib/uuid';
-import { clearDraft, readDraft, writeDraft, type DraftScope } from '@/lib/workout-drafts';
+import { clearDraft, isWorkoutEnded, readDraft, writeDraft, type DraftScope } from '@/lib/workout-drafts';
 import { formatPace, formatSpeed, paceSecondsPerKm, parseDuration, speedKmh } from '@/lib/workout-metrics';
 import type { ExerciseType } from '@/types/database';
 
@@ -36,6 +36,12 @@ const DRAFT_DEBOUNCE_MS = 400;
 
 export interface SavedSet extends SetSnapshot {
   set_number: number;
+}
+
+function savedMessage(saved: { setNumber: number; replayed: boolean; changedAfterRetry: boolean }, setBased: boolean): string {
+  if (saved.replayed && saved.changedAfterRetry) return 'Dieser Eintrag war schon mit den ursprünglichen Werten gespeichert – deine Änderung wurde nicht übernommen. Prüfe ihn in der Liste.';
+  if (saved.replayed) return 'Dieser Eintrag war bereits gespeichert.';
+  return setBased ? `Satz ${saved.setNumber} gespeichert.` : 'Eintrag gespeichert.';
 }
 
 /** Where the values currently in the inputs came from — decides the hint under the form
@@ -140,26 +146,39 @@ export function SetLogger({
 
   // ---- saving ----
   const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState<{ setNumber: number; replayed: boolean } | null>(null);
-  const [confirmedCount, setConfirmedCount] = useState(savedSets.length);
+  const [saved, setSaved] = useState<{ setNumber: number; replayed: boolean; changedAfterRetry: boolean } | null>(null);
+  // The set number the server confirmed, valid only while the list of saved sets is still the one it was confirmed
+  // against: once the refreshed list arrives (or a set is deleted) the list itself is the truth again.
+  const [confirmedAt, setConfirmedAt] = useState<{ atLength: number; count: number } | null>(null);
   const [collapsed, setCollapsed] = useState(!setBased && savedSets.length > 0);
   // One id per ENTRY: it stays the same across retries of that entry and changes only after a confirmed save.
   const [submissionId, setSubmissionId] = useState(() => newUuid());
   // The outcome of the last attempt is unknown (no answer arrived): the entry may or may not be stored.
   const [uncertain, setUncertain] = useState(false);
+  // "Entwurf verwerfen" asks once more (it sits next to the save button and would cost typed input).
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  useEffect(() => {
+    if (!confirmDiscard) return;
+    const timer = window.setTimeout(() => setConfirmDiscard(false), 4000);
+    return () => window.clearTimeout(timer);
+  }, [confirmDiscard]);
   // Entries whose save was already confirmed: a second answer for the same entry (a double tap sends it twice) is ignored.
   const confirmedEntries = useRef(new Set<string>());
-  const nextSetNumber = Math.max(savedSets.length, confirmedCount) + 1;
+  // What was sent the first time under the current entry id — to notice a retry that carries different values.
+  const firstAttempt = useRef<{ id: string; values: FormValues } | null>(null);
+  const nextSetNumber = (confirmedAt && confirmedAt.atLength === savedSets.length ? Math.max(confirmedAt.count, savedSets.length) : savedSets.length) + 1;
 
   // Where the save button sat before saving: a new set row appears above the form and would push the button
   // down, so the next tap would miss it (browsers without scroll anchoring, notably iOS Safari).
   const submitRef = useRef<HTMLButtonElement>(null);
   const anchorTop = useRef<number | null>(null);
+  const anchorScrollY = useRef(0);
   useIsoLayoutEffect(() => {
     const button = submitRef.current;
     const before = anchorTop.current;
     anchorTop.current = null;
     if (before == null || !button) return;
+    if (Math.abs(window.scrollY - anchorScrollY.current) > 2) return; // the user scrolled meanwhile: not ours to correct
     const delta = button.getBoundingClientRect().top - before;
     if (Math.abs(delta) > 1 && Math.abs(delta) < 300) window.scrollBy({ top: delta, behavior: 'auto' });
   }, [savedSets.length]);
@@ -169,6 +188,9 @@ export function SetLogger({
   const scope: DraftScope = useMemo(() => ({ userId, workoutId, workoutExerciseId, type }), [userId, workoutId, workoutExerciseId, type]);
   const touchedRef = useRef(false); // the user has typed or chosen something since mount
   const mountedRef = useRef(false);
+  // Right after a draft was restored the state equals what is stored: writing it again would only re-stamp it
+  // (restarting its 24 h expiry) and replace "wiederhergestellt" by "gespeichert". Any edit clears this.
+  const skipPersistRef = useRef(false);
 
   const dirty = !sameValues(values, baseline.values) || (type === 'bodyweight' && bwMode !== baseline.bwMode);
 
@@ -179,7 +201,7 @@ export function SetLogger({
   const { registerDraftProbe, isRowRemoved } = actions;
   const persistDraft = useCallback(
     (reason: 'typing' | 'leaving') => {
-      if (isRowRemoved(workoutExerciseId)) return; // replaced in this workout: its draft must not come back
+      if (isRowRemoved(workoutExerciseId) || isWorkoutEnded(workoutId)) return; // replaced / finished / skipped / discarded: its draft must not come back
       const cur = latest.current;
       if (!cur.dirty) {
         // Only the debounced path may delete a draft (the user went back to the suggestion); a lifecycle
@@ -193,7 +215,7 @@ export function SetLogger({
       const ok = writeDraft(scope, exerciseId, { values: cur.values, bwMode: type === 'bodyweight' ? cur.bwMode : undefined, more: cur.more }, Date.now());
       if (reason === 'typing') setDraftState(ok ? 'saved' : 'unavailable');
     },
-    [scope, exerciseId, type, workoutExerciseId, isRowRemoved],
+    [scope, exerciseId, type, workoutExerciseId, workoutId, isRowRemoved],
   );
 
   // Restore a draft once, after mount — and never over something the user already typed.
@@ -215,6 +237,7 @@ export function SetLogger({
     setMore(res.draft.more === true);
     setSource('draft');
     setDraftState('restored');
+    skipPersistRef.current = true;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -224,7 +247,13 @@ export function SetLogger({
       mountedRef.current = true;
       return;
     }
-    const timer = window.setTimeout(() => persistDraft('typing'), DRAFT_DEBOUNCE_MS);
+    const timer = window.setTimeout(() => {
+      if (skipPersistRef.current) {
+        skipPersistRef.current = false;
+        return;
+      }
+      persistDraft('typing');
+    }, DRAFT_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
   }, [values, bwMode, more, baseline, persistDraft]);
 
@@ -248,6 +277,7 @@ export function SetLogger({
   // ---- editing ----
   function touch() {
     touchedRef.current = true;
+    skipPersistRef.current = false;
     setSource('typed');
     setSaved(null);
     setCopyNote(null);
@@ -267,6 +297,7 @@ export function SetLogger({
   }
 
   function discardDraft() {
+    setConfirmDiscard(false);
     touchedRef.current = true;
     setValues(baseline.values);
     setBwMode(baseline.bwMode);
@@ -280,6 +311,7 @@ export function SetLogger({
   // ---- copying an earlier result into the inputs (never saves) ----
   function applyCopy(index: number, copied: FormValues, mode: BodyweightMode | undefined) {
     touchedRef.current = true;
+    skipPersistRef.current = false;
     const nextMode = mode ?? bwMode;
     setBwMode(nextMode);
     setValues(copied);
@@ -329,7 +361,9 @@ export function SetLogger({
     const mode = bwMode;
     const formData = buildFormData();
     const entryId = submissionId;
+    if (firstAttempt.current?.id !== entryId) firstAttempt.current = { id: entryId, values: submitted };
     anchorTop.current = setBased ? (submitRef.current?.getBoundingClientRect().top ?? null) : null;
+    anchorScrollY.current = window.scrollY;
     startTransition(async () => {
       try {
         const res = await addSetAction(formData);
@@ -342,19 +376,28 @@ export function SetLogger({
         confirmedEntries.current.add(entryId);
         // Server-confirmed: only now does the set number advance and the form get its next suggestion.
         const retained = retainedAfterSave(type, mode, submitted);
-        setConfirmedCount((c) => Math.max(c, res.setNumber));
-        setSaved({ setNumber: res.setNumber, replayed: res.replayed });
+        // The inputs stay editable while a save is running: if the user already typed the NEXT entry, that is
+        // theirs and must not be replaced by the suggestion derived from the entry that was just saved.
+        const typedSince = !sameValues(latest.current.values, submitted) || (type === 'bodyweight' && latest.current.bwMode !== mode);
+        // A retry after a lost answer that carries other values than the first try: the server kept the first.
+        const first = firstAttempt.current;
+        const changedAfterRetry = res.replayed && !!first && first.id === entryId && !sameValues(first.values, submitted);
+        firstAttempt.current = null;
+        setConfirmedAt({ atLength: savedSets.length, count: res.setNumber });
+        setSaved({ setNumber: res.setNumber, replayed: res.replayed, changedAfterRetry });
         setSubmissionId(newUuid());
         setUncertain(false);
         setBaseline({ values: retained, bwMode: mode });
-        setValues(retained);
-        setSource('baseline');
+        if (!typedSince) {
+          setValues(retained);
+          setSource('baseline');
+          touchedRef.current = true;
+          clearDraft(scope);
+          setDraftState((s) => (s === 'unavailable' ? s : 'none'));
+        }
         setCopiedIndex(null);
         setCopyNote(null);
         setPendingCopy(null);
-        touchedRef.current = true;
-        clearDraft(scope);
-        setDraftState((s) => (s === 'unavailable' ? s : 'none'));
         if (!setBased) setCollapsed(true);
       } catch {
         // The outcome is unknown (the request may or may not have arrived): keep the input and the
@@ -380,7 +423,7 @@ export function SetLogger({
       <div className="flex flex-col gap-2">
         {saved && (
           <p className="flex items-center gap-1.5 text-sm font-semibold text-brand" role="status">
-            <Check size={15} strokeWidth={2.5} /> {saved.replayed ? 'Dieser Eintrag war bereits gespeichert.' : 'Eintrag gespeichert.'}
+            <Check size={15} strokeWidth={2.5} /> {savedMessage(saved, false)}
           </p>
         )}
         <button
@@ -418,7 +461,7 @@ export function SetLogger({
             <button type="button" onClick={() => applyCopy(pendingCopy.index, pendingCopy.values, pendingCopy.bwMode)} className="btn-primary min-h-[44px] flex-1 px-3 text-sm">
               Ersetzen
             </button>
-            <button type="button" onClick={() => setPendingCopy(null)} className="btn-secondary min-h-[44px] flex-1 px-3 text-sm">
+            <button type="button" autoFocus onClick={() => setPendingCopy(null)} className="btn-secondary min-h-[44px] flex-1 px-3 text-sm">
               Behalten
             </button>
           </div>
@@ -539,13 +582,17 @@ export function SetLogger({
       )}
 
       <div className="flex flex-wrap items-center gap-3">
-        <button ref={submitRef} type="submit" disabled={pending} className="btn-primary px-4 py-2.5 text-sm">
+        <button ref={submitRef} type="submit" aria-disabled={pending} className={`btn-primary px-4 py-2.5 text-sm ${pending ? 'opacity-70' : ''}`}>
           <Plus size={16} strokeWidth={2.25} />
           {pending ? 'Speichern…' : uncertain ? 'Erneut versuchen' : cta}
         </button>
         {(draftState === 'saved' || draftState === 'restored') && dirty && (
-          <button type="button" onClick={discardDraft} className="min-h-[44px] px-1 text-xs font-semibold text-neutral-500">
-            Entwurf verwerfen
+          <button
+            type="button"
+            onClick={() => (confirmDiscard ? discardDraft() : setConfirmDiscard(true))}
+            className={`min-h-[44px] px-1 text-xs font-semibold ${confirmDiscard ? 'text-red-400' : 'text-neutral-500'}`}
+          >
+            {confirmDiscard ? 'Wirklich verwerfen?' : 'Entwurf verwerfen'}
           </button>
         )}
       </div>
@@ -554,7 +601,7 @@ export function SetLogger({
         {saved && (
           <p className="flex items-center gap-1.5 text-sm font-semibold text-brand">
             <Check size={15} strokeWidth={2.5} />
-            {saved.replayed ? 'Dieser Eintrag war bereits gespeichert.' : setBased ? `Satz ${saved.setNumber} gespeichert.` : 'Eintrag gespeichert.'}
+            {savedMessage(saved, setBased)}
           </p>
         )}
         {hint && !saved && <p className="text-xs font-medium text-neutral-500">{hint}</p>}

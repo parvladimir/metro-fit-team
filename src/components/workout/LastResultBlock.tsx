@@ -81,7 +81,7 @@ export function LastResultBlock({
           Werte übernehmen{many ? ` (${noun} ${defaultIndex + 1})` : ''}
         </button>
         {many && (
-          <div role="group" aria-label={`Anderen ${noun} übernehmen`} className="flex items-center">
+          <div role="group" aria-label={`Anderen ${noun} übernehmen`} className="flex flex-wrap items-center">
             <span className="px-1 text-[11px] font-semibold text-neutral-500" aria-hidden="true">
               {noun}
             </span>
@@ -92,7 +92,7 @@ export function LastResultBlock({
                 onClick={() => onCopy(i)}
                 aria-pressed={copiedIndex === i}
                 aria-label={`${noun} ${i + 1} übernehmen: ${setChipLabel(type, set)}`}
-                className={`inline-flex min-h-[44px] min-w-[36px] items-center justify-center rounded-lg px-1.5 text-xs font-bold ${
+                className={`inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg px-1.5 text-xs font-bold ${
                   copiedIndex === i ? 'bg-brand/15 text-brand' : 'text-neutral-600 active:bg-neutral-150'
                 }`}
               >

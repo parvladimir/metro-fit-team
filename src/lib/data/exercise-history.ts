@@ -71,12 +71,16 @@ export async function getExerciseHistory(exerciseId: string, excludeWorkoutId: s
     const { data, error } = await supabase.rpc('get_exercise_history', {
       p_exercise_id: exerciseId,
       p_exclude_workout_id: excludeWorkoutId,
-      p_limit: HISTORY_PAGE_SIZE,
+      // One workout more than shown: that is how "is there more?" is known exactly (never a guess).
+      p_limit: HISTORY_PAGE_SIZE + 1,
       p_before: before,
     });
     if (error) return isMissingFunction(error) ? { status: 'unavailable' } : { status: 'error' };
 
-    const rows = (data ?? []) as Array<Omit<HistoryRow, 'out_exercise_id'> & { out_exercise_id?: string }>;
+    const allRows = (data ?? []) as Array<Omit<HistoryRow, 'out_exercise_id'> & { out_exercise_id?: string }>;
+    const workoutIds = [...new Set(allRows.map((r) => r.out_workout_id))]; // newest first
+    const shown = new Set(workoutIds.slice(0, HISTORY_PAGE_SIZE));
+    const rows = allRows.filter((r) => shown.has(r.out_workout_id));
     const entries: HistoryEntry[] = rows
       .map((row) => ({
         workoutId: row.out_workout_id,
@@ -87,8 +91,7 @@ export async function getExerciseHistory(exerciseId: string, excludeWorkoutId: s
         sets: parseHistorySets(row.out_sets),
       }))
       .filter((e) => e.sets.length > 0);
-    const workouts = new Set(rows.map((r) => r.out_workout_id));
-    return { status: 'ok', entries, hasMore: workouts.size >= HISTORY_PAGE_SIZE };
+    return { status: 'ok', entries, hasMore: workoutIds.length > HISTORY_PAGE_SIZE };
   } catch {
     return { status: 'error' };
   }

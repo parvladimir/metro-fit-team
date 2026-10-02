@@ -21,6 +21,20 @@ export const DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
 const PREFIX = 'mft:draft:';
 const CURRENT_PREFIX = `${PREFIX}v${DRAFT_SCHEMA_VERSION}:`;
 
+/** Workouts this page has just ended (finished, skipped, discarded). Their on-screen forms are about to unmount, and an
+ * unmount flush must not write the drafts back after they were cleared. Lives only in memory: a reload starts clean. */
+const endedWorkouts = new Set<string>();
+export function markWorkoutEnded(workoutId: string): void {
+  endedWorkouts.add(workoutId);
+}
+/** Called when ending failed and the workout goes on. */
+export function unmarkWorkoutEnded(workoutId: string): void {
+  endedWorkouts.delete(workoutId);
+}
+export function isWorkoutEnded(workoutId: string): boolean {
+  return endedWorkouts.has(workoutId);
+}
+
 export interface DraftScope {
   userId: string;
   workoutId: string;
@@ -114,7 +128,7 @@ export function readDraft(scope: DraftScope, exerciseId: string, now: number, st
 
 /** Returns false when the draft could not be stored (storage missing or full). */
 export function writeDraft(scope: DraftScope, exerciseId: string, payload: DraftPayload, now: number, storage: Storage | null = getDraftStorage()): boolean {
-  if (!storage) return false;
+  if (!storage || endedWorkouts.has(scope.workoutId)) return false;
   const values: FormValues = {};
   for (const [k, v] of Object.entries(payload.values)) if (typeof v === 'string' && v.trim() !== '') values[k as keyof FormValues] = v;
   const stored: StoredDraft = { v: DRAFT_SCHEMA_VERSION, t: now, x: exerciseId, f: values, m: payload.bwMode, o: payload.more ? true : undefined };
@@ -168,8 +182,10 @@ function parseKey(key: string): { userId: string; workoutId: string } | null {
   return userId && workoutId ? { userId, workoutId } : null;
 }
 
-/** Drops every draft of one workout (finished, skipped, discarded). */
+/** Drops every draft of one workout (finished, skipped, discarded) and stops further drafts of it from being written
+ * by forms that are still on screen. */
 export function clearDraftsForWorkout(userId: string, workoutId: string, storage: Storage | null = getDraftStorage()): number {
+  markWorkoutEnded(workoutId);
   if (!storage) return 0;
   return removeAll(
     storage,
@@ -194,10 +210,11 @@ export function clearDraftsForUser(userId: string, storage: Storage | null = get
  * that are expired or unreadable, that were written by another schema version, and
  * every draft of a workout that is no longer the user's running one (a user has at
  * most one running workout, so finishing, skipping or discarding makes all of that
- * workout's drafts obsolete).
+ * workout's drafts obsolete). `activeWorkoutId` undefined means "could not find out" (the lookup failed): then
+ * workout-scoped drafts are left alone — only another account's and expired ones go.
  */
 export function sweepDrafts(
-  { userId, activeWorkoutId, now }: { userId: string; activeWorkoutId: string | null; now: number },
+  { userId, activeWorkoutId, now }: { userId: string; activeWorkoutId: string | null | undefined; now: number },
   storage: Storage | null = getDraftStorage(),
 ): number {
   if (!storage) return 0;
@@ -208,7 +225,7 @@ export function sweepDrafts(
       doomed.push(key); // another schema version, or not ours to keep
       continue;
     }
-    if (scope.userId !== userId || scope.workoutId !== activeWorkoutId) {
+    if (scope.userId !== userId || (activeWorkoutId !== undefined && scope.workoutId !== activeWorkoutId)) {
       doomed.push(key);
       continue;
     }
