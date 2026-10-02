@@ -377,6 +377,23 @@ export interface TeamMission {
   updated_at: string;
 }
 
+export interface TeamDuel {
+  id: string;
+  team_id: string;
+  inviter_id: string;
+  invitee_id: string;
+  target_days: number;
+  /** Berlin calendar dates (YYYY-MM-DD); `ends_on` is always `starts_on` + 6. */
+  starts_on: string;
+  ends_on: string;
+  expires_at: string;
+  status: 'pending' | 'accepted' | 'declined' | 'cancelled' | 'expired';
+  responded_at: string | null;
+  cancelled_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface PersonalWeeklyRecap {
   id: string;
   user_id: string;

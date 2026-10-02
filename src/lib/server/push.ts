@@ -241,3 +241,85 @@ export async function notifyWeeklyRecapReady(params: { userId: string; completed
     // never surface push failures
   }
 }
+
+/**
+ * Shared sender for the two duel notifications. The duel is re-read first and
+ * nothing goes out unless it is in the state the notification is about
+ * (still a live pending invitation / actually accepted) between two CURRENT
+ * team members, and the recipient has explicitly opted in to "Duelle" (the
+ * shared gate fails closed for that category and applies quiet hours). The
+ * text carries only the other person's first name — never the goal, the dates
+ * or anything else about the duel. Never throws.
+ */
+async function notifyDuelParticipant(params: {
+  duelId: string;
+  expect: 'pending' | 'accepted';
+  toRole: 'inviter' | 'invitee';
+  text: (actorFirstName: string) => string;
+}): Promise<void> {
+  if (!isPushConfigured()) return;
+  try {
+    const admin = createAdminClient();
+    const { data: duel } = await admin
+      .from('team_duels')
+      .select('team_id, inviter_id, invitee_id, status, expires_at')
+      .eq('id', params.duelId)
+      .maybeSingle();
+    if (!duel || duel.status !== params.expect) return;
+    if (duel.status === 'pending' && new Date(duel.expires_at).getTime() <= Date.now()) return;
+
+    const recipientId = params.toRole === 'invitee' ? duel.invitee_id : duel.inviter_id;
+    const actorId = params.toRole === 'invitee' ? duel.inviter_id : duel.invitee_id;
+
+    const { data: members } = await admin
+      .from('team_members')
+      .select('user_id')
+      .eq('team_id', duel.team_id)
+      .in('user_id', [duel.inviter_id, duel.invitee_id]);
+    if ((members ?? []).length < 2) return;
+    if (!(await shouldDeliverPush(recipientId, 'duelle'))) return;
+
+    const [{ data: subs }, { data: actor }] = await Promise.all([
+      admin.from('push_subscriptions').select('id, endpoint, p256dh, auth').eq('user_id', recipientId),
+      admin.from('profiles').select('full_name').eq('id', actorId).single(),
+    ]);
+    if (!subs || subs.length === 0) return;
+
+    ensureVapidConfigured();
+    await deliver(
+      admin,
+      subs as PushSub[],
+      JSON.stringify({
+        title: 'METRO Fit Team',
+        body: params.text(firstName(actor?.full_name || 'Jemand')),
+        url: '/team/duelle',
+        tag: `duel-${params.duelId}`,
+      })
+    );
+  } catch {
+    // never surface push failures
+  }
+}
+
+/** "X lädt dich zu einem Freundschaftsduell ein." — to the invitee, once, right
+ * after a NEW invitation was created (callers pass it only when the database
+ * reported `is_new`, so a retried submit never notifies twice). */
+export async function notifyDuelInvitation(params: { duelId: string }): Promise<void> {
+  await notifyDuelParticipant({
+    duelId: params.duelId,
+    expect: 'pending',
+    toRole: 'invitee',
+    text: (who) => `${who} lädt dich zu einem Freundschaftsduell ein.`,
+  });
+}
+
+/** "X hat dein Duell angenommen." — to the inviter, once, when the invitee
+ * accepts. Declining, withdrawing and expiry deliberately send nothing. */
+export async function notifyDuelAccepted(params: { duelId: string }): Promise<void> {
+  await notifyDuelParticipant({
+    duelId: params.duelId,
+    expect: 'accepted',
+    toRole: 'inviter',
+    text: (who) => `${who} hat dein Duell angenommen.`,
+  });
+}

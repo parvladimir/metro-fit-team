@@ -63,6 +63,13 @@ export function formatChatDayLabel(date: Date, now: Date = new Date(), timeZone:
   return `${weekday}., ${day}.${m}.${y}`;
 }
 
+/** "Sa., 03.10." for a YYYY-MM-DD calendar key — weekday and day.month, no
+ * year: a compact label for dates a few days either side of today. */
+export function formatDayKeyShort(dayKey: string): string {
+  const [, month, day] = dayKey.split('-');
+  return `${WEEKDAY_ABBR_DE[new Date(`${dayKey}T00:00:00Z`).getUTCDay()]}., ${day}.${month}.`;
+}
+
 /** HH:MM wall-clock time of a timestamp in the given timezone (for pre-filling
  * a same-day time-correction input). */
 export function localTimeString(d: Date, timeZone: string = APP_TIMEZONE): string {

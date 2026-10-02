@@ -13,6 +13,7 @@ import {
   berlinWeekRange,
   berlinPreviousWeekRange,
   addDaysToKey,
+  formatDayKeyShort,
   resolveLocalDateTime,
 } from './date';
 
@@ -306,5 +307,14 @@ describe('resolveLocalDateTime', () => {
     // an event uses resolveLocalDateTime instead and must not change it.
     expect(localDateTimeToUtc('2026-03-29T02:30')!.toISOString()).toBe('2026-03-29T00:30:00.000Z');
     expect(localDateTimeToUtc('2026-10-25T02:30')!.toISOString()).toBe('2026-10-25T01:30:00.000Z');
+  });
+});
+
+describe('formatDayKeyShort', () => {
+  it('gives weekday, day and month — read from the calendar key, not from any time zone', () => {
+    expect(formatDayKeyShort('2026-10-03')).toBe('Sa., 03.10.');
+    expect(formatDayKeyShort('2026-10-04')).toBe('So., 04.10.');
+    expect(formatDayKeyShort('2026-10-05')).toBe('Mo., 05.10.');
+    expect(formatDayKeyShort('2027-01-01')).toBe('Fr., 01.01.');
   });
 });
