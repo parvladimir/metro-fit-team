@@ -369,6 +369,8 @@ export const de = {
   'notification.category.herausforderung': 'Herausforderung',
   'notification.category.team_aktivitaet': 'Team-Aktivität',
   'notification.category.wochenzusammenfassung': 'Wochenzusammenfassung',
+  'notification.category.duelle': 'Duelle',
+  'notification.category.gemeinsame_trainings': 'Gemeinsame Trainings',
   'notification.empty': 'Keine Benachrichtigungen.',
   'notification.settings.title': 'Benachrichtigungen',
   'notification.settings.description': 'Wähle, worüber wir dich informieren dürfen.',

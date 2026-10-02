@@ -5,6 +5,7 @@ import { revalidatePath } from 'next/cache';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { requireAuthUser } from '@/lib/data/profile';
+import { ALL_NOTIFICATION_CATEGORIES, OPT_IN_CATEGORIES } from '@/lib/notification-gating';
 
 export async function updateProfileAction(formData: FormData) {
   const user = await requireAuthUser();
@@ -48,12 +49,25 @@ export async function updatePrivacySettingsAction(formData: FormData) {
 
 const DEFAULT_MOTIVATION_PAUSE_DAYS = 28;
 
+/** `notification_preferences` columns that only exist once migration 0044
+ * (quiet hours / pause) and 0045 (duel / joint-training opt-ins) are applied. */
+const COLUMNS_ADDED_AFTER_BASELINE: ReadonlySet<string> = new Set([
+  'quiet_hours_start',
+  'quiet_hours_end',
+  'motivation_paused_until',
+  ...OPT_IN_CATEGORIES,
+]);
+
 export async function updateNotificationPreferencesAction(formData: FormData) {
   const user = await requireAuthUser();
   const supabase = await createClient();
 
-  const categories = ['trainingserinnerung', 'wochenziel', 'messungserinnerung', 'herausforderung', 'team_aktivitaet', 'wochenzusammenfassung', 'chat_nachrichten', 'reaktionen_antworten', 'erwaehnungen'];
-  const payload: Record<string, boolean | string | null> = Object.fromEntries(categories.map((c) => [c, formData.get(c) === 'on']));
+  // The same list the settings page renders from — an absent checkbox is
+  // written as `false`, so the form and this action must never disagree on
+  // which categories exist.
+  const payload: Record<string, boolean | string | null> = Object.fromEntries(
+    ALL_NOTIFICATION_CATEGORIES.map((c) => [c, formData.get(c) === 'on']),
+  );
 
   // Quiet hours: both-or-neither, so a half-filled pair never persists.
   const quietStart = String(formData.get('quietHoursStart') || '').trim();
@@ -71,7 +85,19 @@ export async function updateNotificationPreferencesAction(formData: FormData) {
     payload.motivation_paused_until = null;
   }
 
-  await supabase.from('notification_preferences').update(payload).eq('user_id', user.id);
+  const { error } = await supabase.from('notification_preferences').update(payload).eq('user_id', user.id);
+  if (error && (error.code === 'PGRST204' || error.code === '42703')) {
+    // The code can be live before its migration is applied (migrations reach
+    // production in a separate, human-triggered step). An unknown-column error
+    // then rejects the whole update; save the columns the old schema does have
+    // instead of silently dropping the entire form.
+    console.error('notification_preferences update hit a column the database does not have yet; retrying without newer columns:', error.message);
+    const baseline = Object.fromEntries(Object.entries(payload).filter(([key]) => !COLUMNS_ADDED_AFTER_BASELINE.has(key)));
+    const retry = await supabase.from('notification_preferences').update(baseline).eq('user_id', user.id);
+    if (retry.error) console.error('notification_preferences baseline update failed:', retry.error.message);
+  } else if (error) {
+    console.error('notification_preferences update failed:', error.message);
+  }
   revalidatePath('/profil/einstellungen');
 }
 

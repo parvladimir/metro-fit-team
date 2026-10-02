@@ -4,9 +4,8 @@ import { requireAuthUser } from '@/lib/data/profile';
 import { updateNotificationPreferencesAction, deleteAccountAction } from '../actions';
 import { ConfirmSubmitButton } from '@/components/ui/ConfirmSubmitButton';
 import { t } from '@/lib/i18n';
+import { DEFAULT_ON_CATEGORIES, OPT_IN_CATEGORIES } from '@/lib/notification-gating';
 import type { NotificationPreferences } from '@/types/database';
-
-const CATEGORIES = ['chat_nachrichten', 'reaktionen_antworten', 'erwaehnungen', 'trainingserinnerung', 'wochenziel', 'messungserinnerung', 'herausforderung', 'team_aktivitaet', 'wochenzusammenfassung'] as const;
 
 export default async function EinstellungenPage() {
   const user = await requireAuthUser();
@@ -25,12 +24,28 @@ export default async function EinstellungenPage() {
         <p className="section-title mb-2">{t('notification.settings.title')}</p>
         <p className="mb-3 text-xs text-neutral-500">{t('notification.settings.description')}</p>
         <form action={updateNotificationPreferencesAction} className="flex flex-col gap-2">
-          {CATEGORIES.map((cat) => (
+          {DEFAULT_ON_CATEGORIES.map((cat) => (
             <label key={cat} className="card flex items-center justify-between py-3">
               <span className="text-sm font-medium text-neutral-800">{t(`notification.category.${cat}` as const)}</span>
               <input type="checkbox" name={cat} defaultChecked={prefs?.[cat] ?? true} className="h-5 w-5 accent-brand" />
             </label>
           ))}
+
+          <div className="mt-2 flex flex-col gap-2 border-t border-white/[0.08] pt-4">
+            <div>
+              <p className="label mb-1">Optional – standardmäßig aus</p>
+              <p className="text-xs text-neutral-500">
+                Nur wenn du das möchtest: Einladungen zu Freundschaftsduellen und zu gemeinsamen Trainings.
+              </p>
+            </div>
+            {OPT_IN_CATEGORIES.map((cat) => (
+              <label key={cat} className="card flex items-center justify-between py-3">
+                <span className="text-sm font-medium text-neutral-800">{t(`notification.category.${cat}` as const)}</span>
+                {/* `=== true`, not `?? true`: these are off unless explicitly switched on. */}
+                <input type="checkbox" name={cat} defaultChecked={prefs?.[cat] === true} className="h-5 w-5 accent-brand" />
+              </label>
+            ))}
+          </div>
 
           <div className="mt-2 border-t border-white/[0.08] pt-4">
             <p className="label mb-1">Ruhezeiten</p>

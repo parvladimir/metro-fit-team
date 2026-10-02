@@ -2357,4 +2357,75 @@ describeIntegration('Row Level Security', () => {
       });
     });
   });
+
+  describe('Milestone C: duels, training invitations, opt-in notifications, evaluation', () => {
+    let cTeamId: string;
+    let C1: typeof userB; // admin
+    let C2: typeof userB; // member
+    let C3: typeof userB; // member
+
+    beforeAll(async () => {
+      const { data: team } = await admin
+        .from('teams')
+        .insert({ name: `Milestone C Test Team ${Date.now()}`, slug: `milestone-c-${Date.now()}` })
+        .select('id')
+        .single();
+      cTeamId = team!.id;
+      C1 = await createTestUser('c-admin');
+      C2 = await createTestUser('c-member-2');
+      C3 = await createTestUser('c-member-3');
+      await admin.from('team_members').insert([
+        { team_id: cTeamId, user_id: C1.id, role: 'team_admin' },
+        { team_id: cTeamId, user_id: C2.id, role: 'member' },
+        { team_id: cTeamId, user_id: C3.id, role: 'member' },
+      ]);
+    });
+    afterAll(async () => {
+      await admin.from('teams').delete().eq('id', cTeamId);
+      for (const u of [C1, C2, C3]) await admin.auth.admin.deleteUser(u.id).catch(() => undefined);
+    });
+
+    describe('opt-in notification categories (duelle, gemeinsame_trainings)', () => {
+      const NINE_DEFAULT_ON = [
+        'chat_nachrichten', 'reaktionen_antworten', 'erwaehnungen', 'trainingserinnerung', 'wochenziel',
+        'messungserinnerung', 'herausforderung', 'team_aktivitaet', 'wochenzusammenfassung',
+      ];
+
+      it('141. both new categories default to FALSE on a fresh profile while the nine existing ones stay ON', async () => {
+        const { data, error } = await admin.from('notification_preferences').select('*').eq('user_id', C1.id).single();
+        expect(error).toBeNull();
+        expect(data!.duelle).toBe(false);
+        expect(data!.gemeinsame_trainings).toBe(false);
+        for (const category of NINE_DEFAULT_ON) expect(data![category], category).toBe(true);
+      });
+
+      it('142. a user can switch an opt-in on for themselves without touching the other categories or the other opt-in', async () => {
+        const before = (await admin.from('notification_preferences').select('*').eq('user_id', C2.id).single()).data!;
+        const res = await C2.client.from('notification_preferences').update({ duelle: true }).eq('user_id', C2.id).select('*').single();
+        expect(res.error).toBeNull();
+        expect(res.data!.duelle).toBe(true);
+        expect(res.data!.gemeinsame_trainings).toBe(false);
+        for (const category of NINE_DEFAULT_ON) expect(res.data![category], category).toBe(before[category]);
+        expect(res.data!.quiet_hours_start).toBe(before.quiet_hours_start);
+        expect(res.data!.motivation_paused_until).toBe(before.motivation_paused_until);
+
+        const off = await C2.client.from('notification_preferences').update({ duelle: false }).eq('user_id', C2.id).select('duelle').single();
+        expect(off.data!.duelle).toBe(false);
+      });
+
+      it('143. the new columns are covered by the existing owner-only RLS (no cross-user read or write, no anonymous read)', async () => {
+        const write = await C2.client.from('notification_preferences').update({ duelle: true, gemeinsame_trainings: true }).eq('user_id', C1.id).select('user_id');
+        expect(write.data ?? []).toEqual([]);
+        const { data: unchanged } = await admin.from('notification_preferences').select('duelle, gemeinsame_trainings').eq('user_id', C1.id).single();
+        expect(unchanged).toEqual({ duelle: false, gemeinsame_trainings: false });
+
+        const read = await C2.client.from('notification_preferences').select('duelle, gemeinsame_trainings').eq('user_id', C1.id);
+        expect(read.data ?? []).toEqual([]);
+
+        const anon = createClient(SUPABASE_URL, ANON_KEY);
+        const anonRead = await anon.from('notification_preferences').select('duelle').eq('user_id', C1.id);
+        expect(anonRead.data ?? []).toEqual([]);
+      });
+    });
+  });
 });

@@ -519,6 +519,9 @@ export interface NotificationPreferences {
   chat_nachrichten: boolean;
   reaktionen_antworten: boolean;
   erwaehnungen: boolean;
+  /** Opt-in: unlike every category above, these two default to false. */
+  duelle: boolean;
+  gemeinsame_trainings: boolean;
   /** "HH:MM:SS", or null when quiet hours aren't configured. */
   quiet_hours_start: string | null;
   quiet_hours_end: string | null;
