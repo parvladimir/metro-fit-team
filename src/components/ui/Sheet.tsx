@@ -81,7 +81,7 @@ export function Sheet({
           <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-neutral-300" />
           <div className="mb-3 flex items-center justify-between gap-3">
             <h2 className="min-w-0 break-words text-lg font-bold text-neutral-900">{title}</h2>
-            <button type="button" onClick={onClose} aria-label={closeLabel} className="btn-icon shrink-0">
+            <button type="button" onClick={onClose} aria-label={closeLabel} className="btn-icon h-11 w-11 shrink-0">
               <X size={18} />
             </button>
           </div>
