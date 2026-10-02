@@ -53,6 +53,12 @@ function strip(over: Partial<Parameters<typeof PinnedMessageStrip>[0]> = {}) {
 }
 
 describe('PinnedMessageStrip', () => {
+  it('stays in view while the chat page scrolls (its offset below the status bar is checked in a real browser: jsdom drops env())', () => {
+    strip();
+    const section = container.querySelector<HTMLElement>('section[aria-label="Angeheftete Nachricht"]')!;
+    expect(section.classList.contains('sticky')).toBe(true);
+  });
+
   it('shows the title, who wrote it and the start of the original message', () => {
     strip();
     const section = container.querySelector('section[aria-label="Angeheftete Nachricht"]')!;

@@ -50,7 +50,13 @@ export function PinnedMessageStrip({
   }
 
   return (
-    <section aria-label="Angeheftete Nachricht" className="shrink-0 border-b border-brand/25 bg-surface-2 px-4 py-1.5">
+    // The chat scrolls with the page (the header scrolls away), so the strip sticks below the status bar: a pinned
+    // message that is out of sight whenever you read the latest messages would not be pinned at all.
+    <section
+      aria-label="Angeheftete Nachricht"
+      className="sticky z-20 shrink-0 border-b border-brand/25 bg-surface-2 px-4 py-1.5"
+      style={{ top: 'env(safe-area-inset-top, 0px)' }}
+    >
       <div className="flex items-center gap-2">
         <Pin size={15} strokeWidth={2.1} className="shrink-0 text-brand" aria-hidden="true" />
         <button
