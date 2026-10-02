@@ -38,8 +38,9 @@ export async function GET() {
     achievements: achievements.data,
     metricPreferences: preferences.data,
     privacySettings: privacy.data,
-    // Absent (not an error) while the database does not have the favourites table yet.
-    favoriteExercises: favorites.error ? [] : favorites.data,
+    // null (the export still works) while the database does not have the favourites table yet or the read
+    // failed — never an empty list, which would claim "no favourites".
+    favoriteExercises: favorites.error ? null : favorites.data,
   };
 
   return new NextResponse(JSON.stringify(exportPayload, null, 2), {
