@@ -3242,6 +3242,15 @@ describeIntegration('Row Level Security', () => {
           expect(time).toBe(hhmm);
         }
       });
+
+      it('183. team_has_member (used by the answers\' RLS) only answers for a team the caller belongs to — it cannot be used to probe other teams\' rosters', async () => {
+        const ask = (who: Who, team: string, user: string) => who.client.rpc('team_has_member', { p_team_id: team, p_user_id: user });
+        expect((await ask(C2, cTeamId, C3.id)).data).toBe(true); // own team: a teammate
+        expect((await ask(C2, cTeamId, outsider.id)).data).toBe(false); // own team: not a member
+        expect((await ask(C2, outsiderTeamId, outsider.id)).data).toBe(false); // another team's real member: indistinguishable from "no"
+        expect((await ask(outsider, cTeamId, C2.id)).data).toBe(false); // an outsider learns nothing about this team
+        expect((await ask(outsider, outsiderTeamId, outsider.id)).data).toBe(true); // ...but their own team works
+      });
     });
 
     describe('engagement evaluation (admin-only, aggregate-only)', () => {
@@ -3307,7 +3316,7 @@ describeIntegration('Row Level Security', () => {
         }
       });
 
-      it('183. only a team admin of THAT team can read it — not a member, an admin of another team, an outsider or an anonymous caller', async () => {
+      it('184. only a team admin of THAT team can read it — not a member, an admin of another team, an outsider or an anonymous caller', async () => {
         expect((await summary(C1)).error).toBeNull();
         for (const who of [C2, C3, outsider, userA]) await expectError(summary(who), 'not_team_admin');
         await expectError(summary(C1, 4, outsiderTeamId), 'not_team_admin'); // an admin asking about a team that is not theirs
@@ -3315,7 +3324,7 @@ describeIntegration('Row Level Security', () => {
         expect((await anon.rpc('get_team_engagement_summary', { p_team_id: cTeamId, p_weeks: 4 })).error).not.toBeNull();
       });
 
-      it('184. the result is counts only: exactly the agreed columns, no id, name, text or per-person value', async () => {
+      it('185. the result is counts only: exactly the agreed columns, no id, name, text or per-person value', async () => {
         const res = await summary(C1, 3);
         expect(res.error).toBeNull();
         const rows = res.data as Record<string, unknown>[];
@@ -3333,7 +3342,7 @@ describeIntegration('Row Level Security', () => {
         expect(raw).not.toMatch(/Test|@|full_name|email/i);
       });
 
-      it('185. the window is clamped to 1–26 Berlin weeks, newest first, consecutive Mondays, only the current week in progress', async () => {
+      it('186. the window is clamped to 1–26 Berlin weeks, newest first, consecutive Mondays, only the current week in progress', async () => {
         expect((await summary(C1, 0)).data).toHaveLength(1);
         expect((await summary(C1, -5)).data).toHaveLength(1);
         expect((await summary(C1, 100)).data).toHaveLength(26);
@@ -3343,7 +3352,7 @@ describeIntegration('Row Level Security', () => {
         expect(rows.map((r) => r.in_progress)).toEqual([true, false, false, false, false, false]);
       });
 
-      it('186. a week is Monday to Sunday in Berlin time: Sunday 23:30 and Monday 00:30 land in different weeks; returning means active the week before too', async () => {
+      it('187. a week is Monday to Sunday in Berlin time: Sunday 23:30 and Monday 00:30 land in different weeks; returning means active the week before too', async () => {
         const thisMonday = mondayOf(0);
         const lastMonday = mondayOf(-1);
         await finishAt(C2, at(thisMonday, '00:30')); // first minutes of this week
@@ -3360,7 +3369,7 @@ describeIntegration('Row Level Security', () => {
         expect(previous.in_progress).toBe(false);
       });
 
-      it('187. weekly-goal completion uses each member\'s own goal and workout count; many workouts still count a member once', async () => {
+      it('188. weekly-goal completion uses each member\'s own goal and workout count; many workouts still count a member once', async () => {
         const last = mondayOf(-1);
         await admin.from('profiles').update({ weekly_goal: 2 }).eq('id', C2.id);
         await admin.from('profiles').update({ weekly_goal: 3 }).eq('id', C3.id);
@@ -3374,7 +3383,7 @@ describeIntegration('Row Level Security', () => {
         expect(row.goal_reached_members).toBe(1); // C2 (goal 2) yes, C3 (goal 3) not yet
       });
 
-      it('188. members who do not share their activity, and members who left, are not counted — and the gap is visible', async () => {
+      it('189. members who do not share their activity, and members who left, are not counted — and the gap is visible', async () => {
         const last = mondayOf(-1);
         await finishAt(C2, at(addDaysToKey(last, 1), '12:00'));
         await finishAt(C3, at(addDaysToKey(last, 2), '12:00'));
@@ -3393,7 +3402,7 @@ describeIntegration('Row Level Security', () => {
         expect((await weekRow(-1)).active_participants).toBe(2);
       });
 
-      it('189. a supported workout is one a teammate reacted to or replied to — counted once, in the workout\'s own week, never for self-reactions, departed people or deleted events', async () => {
+      it('190. a supported workout is one a teammate reacted to or replied to — counted once, in the workout\'s own week, never for self-reactions, departed people or deleted events', async () => {
         const last = mondayOf(-1);
         const w1 = await finishAt(C2, at(addDaysToKey(last, 1), '12:00'));
         const w2 = await finishAt(C2, at(addDaysToKey(last, 2), '12:00'));
@@ -3430,7 +3439,7 @@ describeIntegration('Row Level Security', () => {
         expect((await weekRow(0)).supported_workouts).toBe(0); // bucketed by the workout's week, not by when anyone reacted
       });
 
-      it('190. missions, duels and invitations are counted per start week — duel outcomes and invitation answers are not exposed', async () => {
+      it('191. missions, duels and invitations are counted per start week — duel outcomes and invitation answers are not exposed', async () => {
         const thisMonday = mondayOf(0);
         const lastMonday = mondayOf(-1);
         // Missions: one reached, one cancelled, one not reached — all starting last week.
@@ -3465,7 +3474,7 @@ describeIntegration('Row Level Security', () => {
         await admin.from('team_members').insert({ team_id: cTeamId, user_id: C3.id, role: 'member' });
       });
 
-      it('191. an empty team answers with zeros, and reading the summary writes nothing', async () => {
+      it('192. an empty team answers with zeros, and reading the summary writes nothing', async () => {
         const { data: team } = await admin.from('teams').insert({ name: `Empty Eval ${Date.now()}`, slug: `empty-eval-${Date.now()}` }).select('id').single();
         const E = await createTestUser('c-empty-admin');
         await admin.from('team_members').insert({ team_id: team!.id, user_id: E.id, role: 'team_admin' });

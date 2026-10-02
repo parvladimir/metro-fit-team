@@ -104,6 +104,10 @@ create trigger training_invites_guard_update
 -- a member who left does not linger in the participant list (and returns,
 -- with their answer, if they rejoin).
 -- ---------------------------------------------------------------------------
+-- Callable by clients (RLS policies run with the caller's privileges), so it only
+-- answers for a team the CALLER belongs to — whose roster they can read anyway.
+-- Asked about any other team it says "no" to everyone, so it cannot be used to
+-- find out who is a member of a team the caller is not in.
 create or replace function public.team_has_member(p_team_id uuid, p_user_id uuid)
 returns boolean
 language sql
@@ -111,7 +115,8 @@ security definer
 stable
 set search_path = public
 as $$
-  select exists (select 1 from public.team_members where team_id = p_team_id and user_id = p_user_id);
+  select public.is_team_member(p_team_id)
+     and exists (select 1 from public.team_members where team_id = p_team_id and user_id = p_user_id);
 $$;
 
 grant execute on function public.team_has_member(uuid, uuid) to authenticated;
