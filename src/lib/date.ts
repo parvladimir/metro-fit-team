@@ -149,6 +149,20 @@ export function berlinWeekRange(now: Date = new Date(), timeZone: string = APP_T
   };
 }
 
+/** [start, end) UTC instants for the Berlin-local ISO week immediately
+ * before the one containing `now` — the most recently fully-elapsed
+ * team-local week. Subtracting one day from this week's Monday 00:00 always
+ * lands within the previous Sunday regardless of DST (a transition shifts
+ * that instant by at most ±1h, nowhere near crossing into Saturday or
+ * Monday), so re-running `berlinWeekRange` on that instant safely re-derives
+ * the full previous week. A recap built from this range can never appear
+ * before its week has ended — there's no separate "has the week ended yet"
+ * check to get wrong. */
+export function berlinPreviousWeekRange(now: Date = new Date(), timeZone: string = APP_TIMEZONE): { start: Date; end: Date } {
+  const current = berlinWeekRange(now, timeZone);
+  return berlinWeekRange(new Date(current.start.getTime() - 24 * 60 * 60 * 1000), timeZone);
+}
+
 function timeZoneOffsetMinutes(instant: Date, timeZone: string): number {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone,

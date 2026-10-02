@@ -11,6 +11,7 @@ import {
   toLocalDateTimeInputValue,
   berlinDayRange,
   berlinWeekRange,
+  berlinPreviousWeekRange,
 } from './date';
 
 describe('isoWeekday', () => {
@@ -171,5 +172,25 @@ describe('berlinWeekRange', () => {
     expect(start.toISOString()).toBe('2026-10-18T22:00:00.000Z');
     expect(end.toISOString()).toBe('2026-10-25T23:00:00.000Z');
     expect(end.getTime() - start.getTime()).toBe(7 * 24 * 3600 * 1000 + 3600 * 1000);
+  });
+});
+
+describe('berlinPreviousWeekRange', () => {
+  it('derives the fully-elapsed week immediately before the one containing `now`', () => {
+    // now = Wed Oct 28 (week of Mon Oct26-Sun Nov1); previous week = Mon
+    // Oct19-Sun Oct25, the same fall-back transition week tested directly
+    // above via berlinWeekRange — must match it exactly.
+    const { start, end } = berlinPreviousWeekRange(new Date('2026-10-28T10:00:00Z'));
+    expect(start.toISOString()).toBe('2026-10-18T22:00:00.000Z');
+    expect(end.toISOString()).toBe('2026-10-25T23:00:00.000Z');
+  });
+
+  it('correctly derives a previous week that itself contains the spring-forward transition', () => {
+    // now = Wed Apr 1 (week of Mon Mar30-Sun Apr5); previous week = Mon
+    // Mar23-Sun Mar29, containing the Mar29 CET->CEST transition (23h short).
+    const { start, end } = berlinPreviousWeekRange(new Date('2026-04-01T10:00:00Z'));
+    expect(start.toISOString()).toBe('2026-03-22T23:00:00.000Z');
+    expect(end.toISOString()).toBe('2026-03-29T22:00:00.000Z');
+    expect(end.getTime() - start.getTime()).toBe(7 * 24 * 3600 * 1000 - 3600 * 1000);
   });
 });

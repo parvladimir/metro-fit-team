@@ -4,8 +4,12 @@ import { getAuthUser, getCurrentProfile, getPrimaryTeamMembership } from '@/lib/
 import { getDashboardData } from '@/lib/data/dashboard';
 import { getCoachData } from '@/lib/data/coach';
 import { getMessageReactions } from '@/lib/data/chat';
+import { getCurrentTeamMission, type TeamMissionWithProgress } from '@/lib/data/team-missions';
+import { ensureWeeklyRecapGenerated, type WeeklyRecapResult } from '@/lib/data/weekly-recap';
 import { CoachHeader } from '@/components/dashboard/CoachHeader';
 import { TeamActivityCard } from '@/components/dashboard/TeamActivityCard';
+import { TeamMissionCard } from '@/components/dashboard/TeamMissionCard';
+import { WeeklyRecapTeaser } from '@/components/dashboard/WeeklyRecapTeaser';
 import { NearbyRankCard } from '@/components/dashboard/NearbyRankCard';
 import { berlinWallClock, type CoachInput } from '@/lib/coach';
 import { ProgressRing } from '@/components/ui/ProgressRing';
@@ -29,10 +33,16 @@ export default async function DashboardPage() {
 
   const activityMessageIds = data.teamActivity.members.flatMap((m) => m.workouts.map((w) => w.messageId));
 
-  // Coach header and today's team-activity reactions are independent of each
-  // other, so they run in parallel; a coach-data failure falls back to a
-  // plain personal message rather than breaking the page.
-  const [coach, activityReactions]: [Omit<CoachInput, 'firstName' | 'weekly'>, Awaited<ReturnType<typeof getMessageReactions>>] = await Promise.all([
+  // Coach header, today's team-activity reactions, the current mission and
+  // last week's recap are all independent of each other, so they run in
+  // parallel; each non-essential piece falls back to an empty/absent state
+  // rather than breaking the whole page on its own failure.
+  const [coach, activityReactions, mission, weeklyRecap]: [
+    Omit<CoachInput, 'firstName' | 'weekly'>,
+    Awaited<ReturnType<typeof getMessageReactions>>,
+    TeamMissionWithProgress | null,
+    WeeklyRecapResult,
+  ] = await Promise.all([
     getCoachData(profile, membership?.team_id ?? null, data).catch(() => ({
       totalWorkouts: 1,
       activeWorkout: null,
@@ -47,6 +57,8 @@ export default async function DashboardPage() {
       team: null,
     })),
     getMessageReactions(activityMessageIds),
+    membership?.team_id ? getCurrentTeamMission(membership.team_id).catch(() => null) : Promise.resolve(null),
+    ensureWeeklyRecapGenerated(profile, membership?.team_id ?? null).catch(() => ({ personal: null, team: null })),
   ]);
   const coachInput: CoachInput = {
     ...coach,
@@ -107,7 +119,11 @@ export default async function DashboardPage() {
         </div>
       </section>
 
+      <WeeklyRecapTeaser recap={weeklyRecap.personal} />
+
       <TeamActivityCard summary={data.teamActivity} initialReactions={activityReactions} currentUserId={profile.id} />
+
+      <TeamMissionCard mission={mission} />
 
       <div className="grid grid-cols-2 gap-3">
         <NearbyRankCard data={data.nearbyRanking} />

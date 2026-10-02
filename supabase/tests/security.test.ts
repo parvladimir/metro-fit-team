@@ -2096,4 +2096,265 @@ describeIntegration('Row Level Security', () => {
       expect(reactions?.some((r) => r.user_id === userA.id && r.reaction_type === 'fire')).toBe(true);
     });
   });
+
+  describe('Milestone B: missions, recaps, quiet hours', () => {
+    let mTeamId: string;
+    let M1: typeof userB; // admin
+    let M2: typeof userB; // member
+
+    const finishOn = async (user: typeof userB, dateStr: string, minutes = 20) => {
+      const at = new Date(`${dateStr}T12:00:00+01:00`);
+      const { data: w } = await user.client
+        .from('workouts')
+        .insert({
+          user_id: user.id,
+          team_id: mTeamId,
+          activity_type: 'krafttraining',
+          status: 'laeuft',
+          title: 'Mission Test',
+          started_at: new Date(at.getTime() - minutes * 60000).toISOString(),
+        })
+        .select('id')
+        .single();
+      const res = await user.client.from('workouts').update({ status: 'abgeschlossen', finished_at: at.toISOString(), duration_seconds: minutes * 60 }).eq('id', w!.id);
+      expect(res.error).toBeNull();
+      return w!.id as string;
+    };
+
+    beforeAll(async () => {
+      const { data: team } = await admin
+        .from('teams')
+        .insert({ name: `Mission Test Team ${Date.now()}`, slug: `mission-test-${Date.now()}` })
+        .select('id')
+        .single();
+      mTeamId = team!.id;
+      M1 = await createTestUser('mission-admin');
+      M2 = await createTestUser('mission-member');
+      await admin.from('team_members').insert([
+        { team_id: mTeamId, user_id: M1.id, role: 'team_admin' },
+        { team_id: mTeamId, user_id: M2.id, role: 'member' },
+      ]);
+    });
+    afterAll(async () => {
+      await admin.from('teams').delete().eq('id', mTeamId);
+      for (const u of [M1, M2]) await admin.auth.admin.deleteUser(u.id).catch(() => undefined);
+    });
+
+    describe('team missions (Wochenmission)', () => {
+      let missionId: string;
+
+      it('122. a non-admin member cannot create a mission; an admin can', async () => {
+        const attempt = await M2.client
+          .from('team_missions')
+          .insert({ team_id: mTeamId, title: 'x', target_days: 3, starts_at: '2026-01-01', ends_at: '2026-01-07', created_by: M2.id })
+          .select('id');
+        expect(attempt.data ?? []).toEqual([]);
+
+        const { data, error } = await M1.client
+          .from('team_missions')
+          .insert({ team_id: mTeamId, title: 'Gemeinsam 4 Trainingstage', target_days: 4, starts_at: '2026-01-01', ends_at: '2026-01-07', created_by: M1.id })
+          .select('id')
+          .single();
+        expect(error).toBeNull();
+        missionId = data!.id;
+      });
+
+      it('123. a non-member cannot read this team\'s mission', async () => {
+        const { data } = await outsider.client.from('team_missions').select('id').eq('id', missionId);
+        expect(data ?? []).toEqual([]);
+      });
+
+      it('124. two workouts by the same member on the same date count as one training day', async () => {
+        await finishOn(M1, '2026-01-02');
+        await finishOn(M1, '2026-01-02');
+        const { data, error } = await M1.client.rpc('get_team_mission_training_days', { p_team_id: mTeamId, p_start_date: '2026-01-01', p_end_date: '2026-01-07' });
+        expect(error).toBeNull();
+        expect(Number(data)).toBe(1);
+      });
+
+      it('125. a second member training the same date contributes a second training day', async () => {
+        await finishOn(M2, '2026-01-02');
+        const { data } = await M1.client.rpc('get_team_mission_training_days', { p_team_id: mTeamId, p_start_date: '2026-01-01', p_end_date: '2026-01-07' });
+        expect(Number(data)).toBe(2);
+      });
+
+      it('126. an opted-out member\'s workouts do not count toward the team total', async () => {
+        await admin.from('privacy_settings').upsert({ user_id: M2.id, activity_feed_opt_in: false });
+        const { data } = await M1.client.rpc('get_team_mission_training_days', { p_team_id: mTeamId, p_start_date: '2026-01-01', p_end_date: '2026-01-07' });
+        expect(Number(data)).toBe(1);
+        await admin.from('privacy_settings').upsert({ user_id: M2.id, activity_feed_opt_in: true });
+      });
+
+      it('127. a member removed from the team no longer contributes', async () => {
+        await admin.from('team_members').delete().eq('team_id', mTeamId).eq('user_id', M2.id);
+        const { data } = await M1.client.rpc('get_team_mission_training_days', { p_team_id: mTeamId, p_start_date: '2026-01-01', p_end_date: '2026-01-07' });
+        expect(Number(data)).toBe(1);
+        await admin.from('team_members').insert({ team_id: mTeamId, user_id: M2.id, role: 'member' });
+      });
+
+      it('128. a non-member caller is rejected with not_a_team_member', async () => {
+        const { error } = await outsider.client.rpc('get_team_mission_training_days', { p_team_id: mTeamId, p_start_date: '2026-01-01', p_end_date: '2026-01-07' });
+        expect(error).not.toBeNull();
+      });
+
+      it('129. a non-admin cannot cancel a mission; an admin can', async () => {
+        const attempt = await M2.client.from('team_missions').update({ cancelled_at: new Date().toISOString() }).eq('id', missionId).select('id');
+        expect(attempt.data ?? []).toEqual([]);
+
+        const res = await M1.client.from('team_missions').update({ cancelled_at: new Date().toISOString() }).eq('id', missionId).select('cancelled_at').single();
+        expect(res.error).toBeNull();
+        expect(res.data?.cancelled_at).toBeTruthy();
+      });
+
+      it('130. the freeze trigger rejects changing target_days/starts_at/ends_at even for an admin', async () => {
+        const targetAttempt = await M1.client.from('team_missions').update({ target_days: 99 }).eq('id', missionId);
+        expect(targetAttempt.error).not.toBeNull();
+        const dateAttempt = await M1.client.from('team_missions').update({ starts_at: '2026-02-01' }).eq('id', missionId);
+        expect(dateAttempt.error).not.toBeNull();
+      });
+
+      it('131. maybe_celebrate_mission claims exactly once when progress reaches target', async () => {
+        const { data: mission2 } = await M1.client
+          .from('team_missions')
+          .insert({ team_id: mTeamId, title: 'Celebration Test', target_days: 1, starts_at: '2026-01-10', ends_at: '2026-01-10', created_by: M1.id })
+          .select('id')
+          .single();
+        await finishOn(M1, '2026-01-10');
+
+        const first = await M1.client.rpc('maybe_celebrate_mission', { p_mission_id: mission2!.id });
+        expect(first.error).toBeNull();
+        expect(first.data).toBe(true);
+
+        const second = await M1.client.rpc('maybe_celebrate_mission', { p_mission_id: mission2!.id });
+        expect(second.data).toBe(false);
+
+        const { data: finalRow } = await admin.from('team_missions').select('celebrated_at').eq('id', mission2!.id).single();
+        expect(finalRow?.celebrated_at).toBeTruthy();
+      });
+
+      it('132. mission completion creates zero additional fitness_score_events rows', async () => {
+        const { data: mission3 } = await M1.client
+          .from('team_missions')
+          .insert({ team_id: mTeamId, title: 'Celebration Test 2', target_days: 1, starts_at: '2026-01-11', ends_at: '2026-01-11', created_by: M1.id })
+          .select('id')
+          .single();
+        await finishOn(M2, '2026-01-11');
+
+        const { count: before } = await admin.from('fitness_score_events').select('id', { count: 'exact', head: true }).eq('team_id', mTeamId);
+        await M1.client.rpc('maybe_celebrate_mission', { p_mission_id: mission3!.id });
+        const { count: after } = await admin.from('fitness_score_events').select('id', { count: 'exact', head: true }).eq('team_id', mTeamId);
+        expect(after).toBe(before);
+      });
+    });
+
+    describe('weekly recaps (idempotent generation)', () => {
+      const weekStart = '2026-01-05';
+
+      it('133. upsert_personal_weekly_recap is idempotent: same row, id unchanged, is_new only true once', async () => {
+        const first = await M1.client.rpc('upsert_personal_weekly_recap', {
+          p_week_start: weekStart,
+          p_team_id: mTeamId,
+          p_completed_workouts: 3,
+          p_minutes: 120,
+          p_points: 50,
+          p_weekly_goal: 3,
+          p_goal_achieved: true,
+          p_personal_record_title: null,
+          p_personal_record_detail: null,
+          p_streak_days: 2,
+        });
+        expect(first.error).toBeNull();
+        const row1 = first.data![0];
+        expect(row1.is_new).toBe(true);
+
+        const second = await M1.client.rpc('upsert_personal_weekly_recap', {
+          p_week_start: weekStart,
+          p_team_id: mTeamId,
+          p_completed_workouts: 4,
+          p_minutes: 150,
+          p_points: 70,
+          p_weekly_goal: 3,
+          p_goal_achieved: true,
+          p_personal_record_title: 'Neuer Rekord',
+          p_personal_record_detail: 'Test',
+          p_streak_days: 3,
+        });
+        const row2 = second.data![0];
+        expect(row2.id).toBe(row1.id);
+        expect(row2.is_new).toBe(false);
+
+        const { data: finalRow } = await admin.from('personal_weekly_recaps').select('*').eq('id', row1.id).single();
+        expect(finalRow?.completed_workouts).toBe(4);
+        expect(finalRow?.personal_record_title).toBe('Neuer Rekord');
+      });
+
+      it('134. upsert_team_weekly_recap is idempotent the same way', async () => {
+        const first = await M1.client.rpc('upsert_team_weekly_recap', { p_team_id: mTeamId, p_week_start: weekStart, p_completed_workouts: 5, p_active_members: 2, p_members_goal_reached: 1 });
+        const row1 = first.data![0];
+        const second = await M1.client.rpc('upsert_team_weekly_recap', { p_team_id: mTeamId, p_week_start: weekStart, p_completed_workouts: 8, p_active_members: 2, p_members_goal_reached: 2 });
+        const row2 = second.data![0];
+        expect(row2.id).toBe(row1.id);
+        expect(row2.is_new).toBe(false);
+      });
+
+      it('135. a user cannot read another user\'s personal recap; a non-member cannot read another team\'s recap', async () => {
+        const { data: viaOther } = await M2.client.from('personal_weekly_recaps').select('id').eq('user_id', M1.id);
+        expect(viaOther ?? []).toEqual([]);
+        const { data: viaOutsider } = await outsider.client.from('team_weekly_recaps').select('id').eq('team_id', mTeamId);
+        expect(viaOutsider ?? []).toEqual([]);
+      });
+
+      it('136. mark_weekly_recap_notified only affects the caller\'s own row', async () => {
+        const { data: row } = await admin.from('personal_weekly_recaps').select('id').eq('user_id', M1.id).eq('week_start', weekStart).single();
+        const attempt = await M2.client.rpc('mark_weekly_recap_notified', { p_id: row!.id });
+        expect(attempt.error).toBeNull();
+        const { data: unaffected } = await admin.from('personal_weekly_recaps').select('notified_at').eq('id', row!.id).single();
+        expect(unaffected?.notified_at).toBeNull();
+      });
+
+      it('137. a non-member cannot call get_team_week_summary for a foreign team', async () => {
+        const { error } = await outsider.client.rpc('get_team_week_summary', { p_team_id: mTeamId, p_range_start: '2026-01-05T00:00:00Z', p_range_end: '2026-01-12T00:00:00Z' });
+        expect(error).not.toBeNull();
+      });
+
+      it('138. get_team_week_summary excludes an opted-out member\'s workout from all three counts', async () => {
+        // A narrow, unused-elsewhere single-day window — must not overlap
+        // M2's Jan-11 workout from the mission "celebration" tests above:
+        // get_team_week_summary reads CURRENT opt-in status, so an opt-out
+        // here would otherwise also retroactively exclude that unrelated
+        // earlier workout and confuse this test's before/after comparison.
+        const range = { p_team_id: mTeamId, p_range_start: '2026-01-20T00:00:00+01:00', p_range_end: '2026-01-21T00:00:00+01:00' };
+        const before = (await M1.client.rpc('get_team_week_summary', range)).data![0];
+
+        await admin.from('privacy_settings').upsert({ user_id: M2.id, activity_feed_opt_in: false });
+        await finishOn(M2, '2026-01-20');
+
+        const after = (await M1.client.rpc('get_team_week_summary', range)).data![0];
+        expect(after.completed_workouts).toBe(before.completed_workouts);
+        expect(after.active_members).toBe(before.active_members);
+
+        await admin.from('privacy_settings').upsert({ user_id: M2.id, activity_feed_opt_in: true });
+      });
+    });
+
+    describe('notification quiet hours & motivation pause (new columns)', () => {
+      it('139. a user can set and read their own quiet-hours/motivation-pause preferences', async () => {
+        const until = new Date(Date.now() + 86400000).toISOString();
+        const res = await M1.client
+          .from('notification_preferences')
+          .update({ quiet_hours_start: '22:00', quiet_hours_end: '07:00', motivation_paused_until: until })
+          .eq('user_id', M1.id)
+          .select('quiet_hours_start, quiet_hours_end, motivation_paused_until')
+          .single();
+        expect(res.error).toBeNull();
+        expect(res.data?.quiet_hours_start).toBe('22:00:00');
+        expect(res.data?.motivation_paused_until).toBeTruthy();
+      });
+
+      it('140. a user cannot set another user\'s notification preferences (existing owner-only RLS, unaffected by the new columns)', async () => {
+        const attempt = await M2.client.from('notification_preferences').update({ quiet_hours_start: '08:00' }).eq('user_id', M1.id).select('user_id');
+        expect(attempt.data ?? []).toEqual([]);
+      });
+    });
+  });
 });
