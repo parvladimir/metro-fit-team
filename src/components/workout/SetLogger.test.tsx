@@ -8,6 +8,7 @@ import { markWorkoutEnded, readDraft, unmarkWorkoutEnded } from '@/lib/workout-d
 const addSetAction = vi.fn();
 vi.mock('@/app/(app)/aktivitaet/actions', () => ({ addSetAction: (fd: FormData) => addSetAction(fd) }));
 vi.mock('@/app/(app)/aktivitaet/workout-exercise-actions', () => ({}));
+vi.mock('@/app/(app)/aktivitaet/exercise-library-actions', () => ({}));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 vi.mock('@/components/workout/ExerciseHistorySheet', () => ({ ExerciseHistorySheet: () => null }));
 

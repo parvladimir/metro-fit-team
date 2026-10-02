@@ -104,21 +104,6 @@ export async function createWorkoutAction(formData: FormData) {
   redirect(`/aktivitaet/training/${data.id}`);
 }
 
-export async function addWorkoutExerciseAction(formData: FormData) {
-  const workoutId = String(formData.get('workoutId'));
-  const exerciseId = String(formData.get('exerciseId'));
-  await requireAuthUser();
-  const supabase = await createClient();
-
-  const { count } = await supabase
-    .from('workout_exercises')
-    .select('id', { count: 'exact', head: true })
-    .eq('workout_id', workoutId);
-
-  await supabase.from('workout_exercises').insert({ workout_id: workoutId, exercise_id: exerciseId, position: count ?? 0 });
-  revalidatePath(`/aktivitaet/training/${workoutId}`);
-}
-
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** `replayed` = the very same entry had already been stored (a retry after a lost

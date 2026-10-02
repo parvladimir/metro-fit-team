@@ -16,7 +16,7 @@ export async function GET() {
     return NextResponse.json({ error: 'not_authenticated' }, { status: 401 });
   }
 
-  const [profile, measurements, nutrition, workouts, activities, achievements, preferences, privacy] = await Promise.all([
+  const [profile, measurements, nutrition, workouts, activities, achievements, preferences, privacy, favorites] = await Promise.all([
     supabase.from('profiles').select('*').eq('id', user.id).single(),
     supabase.from('body_measurements').select('*').eq('user_id', user.id),
     supabase.from('nutrition_entries').select('*').eq('user_id', user.id),
@@ -25,6 +25,7 @@ export async function GET() {
     supabase.from('user_achievements').select('*').eq('user_id', user.id),
     supabase.from('user_metric_preferences').select('*').eq('user_id', user.id),
     supabase.from('privacy_settings').select('*').eq('user_id', user.id),
+    supabase.from('exercise_favorites').select('exercise_id, created_at').eq('user_id', user.id),
   ]);
 
   const exportPayload = {
@@ -37,6 +38,9 @@ export async function GET() {
     achievements: achievements.data,
     metricPreferences: preferences.data,
     privacySettings: privacy.data,
+    // null (the export still works) while the database does not have the favourites table yet or the read
+    // failed — never an empty list, which would claim "no favourites".
+    favoriteExercises: favorites.error ? null : favorites.data,
   };
 
   return new NextResponse(JSON.stringify(exportPayload, null, 2), {

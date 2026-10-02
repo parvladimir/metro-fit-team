@@ -2,7 +2,7 @@
 
 import { useRef, useState, useTransition } from 'react';
 import { ArrowLeft, Info } from 'lucide-react';
-import { ExercisePicker, type PickerExercise } from '@/components/exercises/ExercisePicker';
+import { ExercisePicker, type PickerExercise, type PickerFavorites } from '@/components/exercises/ExercisePicker';
 import { Sheet } from '@/components/ui/Sheet';
 import { replaceExerciseAction, type ReplaceExerciseResult } from '@/app/(app)/aktivitaet/workout-exercise-actions';
 import { newUuid } from '@/lib/uuid';
@@ -26,6 +26,8 @@ export function ReplaceExerciseSheet({
   catalogue,
   hasUnsavedInput,
   createHref,
+  favorites,
+  recentIds,
   onClose,
   onDone,
   onRefused,
@@ -36,6 +38,8 @@ export function ReplaceExerciseSheet({
   /** Typed but unsaved input exists for the exercise that would be replaced. */
   hasUnsavedInput: boolean;
   createHref: string;
+  favorites: PickerFavorites | null;
+  recentIds: readonly string[] | null;
   onClose: () => void;
   onDone: (result: Extract<ReplaceExerciseResult, { ok: true }>, replacement: PickerExercise) => void;
   /** The server refused the change (e.g. the workout was finished meanwhile): the screen may be out of date. */
@@ -92,7 +96,7 @@ export function ReplaceExerciseSheet({
           <p className="mb-2 text-sm text-neutral-600">
             Statt <span className="font-semibold text-neutral-900">{target.name}</span>:
           </p>
-          <ExercisePicker items={catalogue} disabledId={target.exerciseId} onPick={pick} createHref={createHref} />
+          <ExercisePicker items={catalogue} disabledId={target.exerciseId} onPick={pick} createHref={createHref} favorites={favorites} recentIds={recentIds} />
         </>
       ) : (
         <div className="flex flex-col gap-3">
