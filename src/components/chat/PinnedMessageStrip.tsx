@@ -50,8 +50,9 @@ export function PinnedMessageStrip({
   }
 
   return (
-    // The chat scrolls with the page (the header scrolls away), so the strip sticks below the status bar: a pinned
-    // message that is out of sight whenever you read the latest messages would not be pinned at all.
+    // In the chat only the message list scrolls, so the strip simply sits above it. The sticky offset below the status
+    // bar is the fallback for a browser without :has() (see .app-shell in globals.css), where the whole page scrolls
+    // instead: a pinned message that is out of sight whenever you read the latest messages would not be pinned at all.
     <section
       aria-label="Angeheftete Nachricht"
       className="sticky z-20 shrink-0 border-b border-brand/25 bg-surface-2 px-4 py-1.5"

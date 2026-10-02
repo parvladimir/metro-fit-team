@@ -279,6 +279,16 @@ body {
     background: #04141a;
   }
 
+  /* A page that scrolls inside itself (the team chat: only the message list scrolls, its header and composer stay
+     put) marks its root `data-fills-viewport`. The shell is then exactly one viewport tall instead of "at least"
+     one, which gives that page's flex column a height to fill; the bottom nav stays below it. With only a
+     min-height the shell grew with the content and the whole document scrolled instead: the list was never its
+     own scroller, so its scroll handling never ran. Browsers without :has() keep that old layout. */
+  .app-shell:has([data-fills-viewport]) {
+    height: 100vh; /* fallback for browsers without dvh support */
+    height: 100dvh;
+  }
+
   .screen-padding {
     @apply px-4;
     padding-top: max(1.25rem, calc(env(safe-area-inset-top) + 0.5rem));
