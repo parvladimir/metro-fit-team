@@ -46,12 +46,30 @@ export async function updatePrivacySettingsAction(formData: FormData) {
   revalidatePath('/profil/datenschutz');
 }
 
+const DEFAULT_MOTIVATION_PAUSE_DAYS = 28;
+
 export async function updateNotificationPreferencesAction(formData: FormData) {
   const user = await requireAuthUser();
   const supabase = await createClient();
 
   const categories = ['trainingserinnerung', 'wochenziel', 'messungserinnerung', 'herausforderung', 'team_aktivitaet', 'wochenzusammenfassung', 'chat_nachrichten', 'reaktionen_antworten', 'erwaehnungen'];
-  const payload = Object.fromEntries(categories.map((c) => [c, formData.get(c) === 'on']));
+  const payload: Record<string, boolean | string | null> = Object.fromEntries(categories.map((c) => [c, formData.get(c) === 'on']));
+
+  // Quiet hours: both-or-neither, so a half-filled pair never persists.
+  const quietStart = String(formData.get('quietHoursStart') || '').trim();
+  const quietEnd = String(formData.get('quietHoursEnd') || '').trim();
+  payload.quiet_hours_start = quietStart && quietEnd ? quietStart : null;
+  payload.quiet_hours_end = quietStart && quietEnd ? quietEnd : null;
+
+  // Motivation pause: no chosen resume date defaults to 4 weeks out, so the
+  // column stays a single nullable timestamp with no sentinel "forever" value.
+  if (formData.get('motivationPaused') === 'on') {
+    const resumeDate = String(formData.get('motivationResumeDate') || '').trim();
+    const resumeAt = resumeDate ? new Date(`${resumeDate}T23:59:59`) : new Date(Date.now() + DEFAULT_MOTIVATION_PAUSE_DAYS * 24 * 60 * 60 * 1000);
+    payload.motivation_paused_until = resumeAt.toISOString();
+  } else {
+    payload.motivation_paused_until = null;
+  }
 
   await supabase.from('notification_preferences').update(payload).eq('user_id', user.id);
   revalidatePath('/profil/einstellungen');

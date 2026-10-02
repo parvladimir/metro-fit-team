@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { TrendingUp, Award, BarChart3, Lock, Settings, Wrench, ChevronRight, type LucideIcon } from 'lucide-react';
+import { TrendingUp, Award, BarChart3, Lock, Settings, Wrench, ChevronRight, History, type LucideIcon } from 'lucide-react';
 import { getCurrentProfile, getPrimaryTeamMembership } from '@/lib/data/profile';
 import { getProfileStats } from '@/lib/data/stats';
 import { signOutAction } from '@/app/(auth)/actions';
@@ -47,6 +47,7 @@ export default async function ProfilPage() {
       )}
 
       <div className="flex flex-col gap-2.5">
+        <MenuLink href="/profil/rueckblick" icon={History} accent="#B794F6" label="Wochenrückblick" />
         <MenuLink href="/profil/fortschritt" icon={TrendingUp} accent="#38BDF8" label={t('chart.progress.title')} />
         <MenuLink href="/profil/erfolge" icon={Award} accent="#F5C04A" label={t('profile.achievements')} />
         <MenuLink href="/profil/metriken" icon={BarChart3} accent="#2DD4BF" label={t('metric.manage')} />

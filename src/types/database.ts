@@ -363,6 +363,53 @@ export interface ChallengeParticipant {
   updated_at: string;
 }
 
+export interface TeamMission {
+  id: string;
+  team_id: string;
+  title: string;
+  target_days: number;
+  starts_at: string;
+  ends_at: string;
+  created_by: string;
+  cancelled_at: string | null;
+  celebrated_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PersonalWeeklyRecap {
+  id: string;
+  user_id: string;
+  team_id: string | null;
+  iso_year: number;
+  iso_week: number;
+  week_start: string;
+  completed_workouts: number;
+  minutes: number;
+  points: number;
+  weekly_goal: number;
+  goal_achieved: boolean;
+  personal_record_title: string | null;
+  personal_record_detail: string | null;
+  streak_days: number;
+  notified_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TeamWeeklyRecap {
+  id: string;
+  team_id: string;
+  iso_year: number;
+  iso_week: number;
+  week_start: string;
+  active_members: number;
+  members_goal_reached: number;
+  completed_workouts: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Message {
   id: string;
   team_id: string;
@@ -472,6 +519,11 @@ export interface NotificationPreferences {
   chat_nachrichten: boolean;
   reaktionen_antworten: boolean;
   erwaehnungen: boolean;
+  /** "HH:MM:SS", or null when quiet hours aren't configured. */
+  quiet_hours_start: string | null;
+  quiet_hours_end: string | null;
+  /** Null = not paused. A past value has auto-resumed. */
+  motivation_paused_until: string | null;
 }
 
 export interface Achievement {

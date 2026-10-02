@@ -31,6 +31,41 @@ export default async function EinstellungenPage() {
               <input type="checkbox" name={cat} defaultChecked={prefs?.[cat] ?? true} className="h-5 w-5 accent-brand" />
             </label>
           ))}
+
+          <div className="mt-2 border-t border-white/[0.08] pt-4">
+            <p className="label mb-1">Ruhezeiten</p>
+            <p className="mb-2 text-xs text-neutral-500">Push-Benachrichtigungen pausieren in diesem Zeitfenster (täglich).</p>
+            <div className="grid grid-cols-2 gap-3">
+              <input type="time" name="quietHoursStart" defaultValue={prefs?.quiet_hours_start?.slice(0, 5) ?? ''} className="input-field" />
+              <input type="time" name="quietHoursEnd" defaultValue={prefs?.quiet_hours_end?.slice(0, 5) ?? ''} className="input-field" />
+            </div>
+            <p className="mt-1 text-[11px] text-neutral-500">Beide leer lassen, um Ruhezeiten zu deaktivieren.</p>
+          </div>
+
+          <div className="mt-2 border-t border-white/[0.08] pt-4">
+            <label className="card flex items-center justify-between py-3">
+              <span className="text-sm font-medium text-neutral-800">Motivation pausieren</span>
+              <input
+                type="checkbox"
+                name="motivationPaused"
+                defaultChecked={!!prefs?.motivation_paused_until && new Date(prefs.motivation_paused_until) > new Date()}
+                className="h-5 w-5 accent-brand"
+              />
+            </label>
+            <p className="mb-2 text-xs text-neutral-500">
+              Betrifft nur Erinnerungen und Wochenrückblicke — Antworten und Erwähnungen kommen weiterhin direkt an.
+            </p>
+            <label className="label" htmlFor="motivationResumeDate">Bis wann (optional)</label>
+            <input
+              id="motivationResumeDate"
+              name="motivationResumeDate"
+              type="date"
+              defaultValue={prefs?.motivation_paused_until ? prefs.motivation_paused_until.slice(0, 10) : ''}
+              className="input-field"
+            />
+            <p className="mt-1 text-[11px] text-neutral-500">Ohne Datum: automatisch 4 Wochen.</p>
+          </div>
+
           <button type="submit" className="btn-primary mt-2">{t('common.saveChanges')}</button>
         </form>
       </section>

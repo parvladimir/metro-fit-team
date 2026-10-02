@@ -5,6 +5,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { eventDeepLink, replyText, firstName } from '@/lib/event-social';
 import { reactionText, type ReactionKey } from '@/lib/reactions';
 import { stripMarkdown } from '@/lib/chat-format';
+import { shouldDeliverPush, filterPushRecipients } from '@/lib/server/push-gate';
 
 let vapidConfigured = false;
 
@@ -59,9 +60,9 @@ export async function notifyEventOwner(params: {
   try {
     ensureVapidConfigured();
     const admin = createAdminClient();
-    const [{ data: actor }, { data: pref }, { data: subs }, { count }] = await Promise.all([
+    const [{ data: actor }, deliverable, { data: subs }, { count }] = await Promise.all([
       admin.from('profiles').select('full_name').eq('id', params.actorId).single(),
-      admin.from('notification_preferences').select('reaktionen_antworten').eq('user_id', params.ownerId).maybeSingle(),
+      shouldDeliverPush(params.ownerId, 'reaktionen_antworten'),
       admin.from('push_subscriptions').select('id, endpoint, p256dh, auth').eq('user_id', params.ownerId),
       admin
         .from('notifications')
@@ -70,7 +71,7 @@ export async function notifyEventOwner(params: {
         .in('category', ['reaktion_antwort', 'erwaehnung'])
         .is('read_at', null),
     ]);
-    if (pref && pref.reaktionen_antworten === false) return;
+    if (!deliverable) return;
     if (!subs || subs.length === 0) return;
 
     const actorName = actor?.full_name || 'Jemand';
@@ -122,18 +123,13 @@ export async function notifyTeamOfNewChatMessage(params: {
     const recipientIds = members.map((m) => m.user_id).filter((id) => !excluded.has(id));
     if (recipientIds.length === 0) return;
 
-    const { data: prefs } = await admin
-      .from('notification_preferences')
-      .select('user_id, chat_nachrichten')
-      .in('user_id', recipientIds);
-
-    const optedIn = new Set((prefs ?? []).filter((p) => p.chat_nachrichten).map((p) => p.user_id));
-    if (optedIn.size === 0) return;
+    const optedIn = await filterPushRecipients(recipientIds, 'chat_nachrichten');
+    if (optedIn.length === 0) return;
 
     const { data: subs } = await admin
       .from('push_subscriptions')
       .select('id, endpoint, p256dh, auth')
-      .in('user_id', Array.from(optedIn));
+      .in('user_id', optedIn);
 
     if (!subs || subs.length === 0) return;
 
@@ -170,9 +166,7 @@ export async function notifyMentionedUsers(params: {
   if (ids.length === 0) return [];
   try {
     const admin = createAdminClient();
-    const { data: prefs } = await admin.from('notification_preferences').select('user_id, erwaehnungen').in('user_id', ids);
-    const off = new Set((prefs ?? []).filter((p) => p.erwaehnungen === false).map((p) => p.user_id as string));
-    const handled = ids.filter((id) => !off.has(id));
+    const handled = await filterPushRecipients(ids, 'erwaehnungen');
     if (handled.length === 0 || !isPushConfigured()) return handled;
 
     ensureVapidConfigured();
@@ -208,5 +202,42 @@ export async function notifyMentionedUsers(params: {
     return handled;
   } catch {
     return [];
+  }
+}
+
+/**
+ * One-time "your weekly recap is ready" push, sent by `ensureWeeklyRecapGenerated`
+ * right after a personal recap row is first created (or was never
+ * successfully notified). Reuses the existing, already-built
+ * "Wochenzusammenfassung" preference — gated through the shared push-gate
+ * (category + quiet hours + motivation pause), unlike the three senders
+ * above, which predate it. Never throws; the caller marks the row notified
+ * regardless of outcome, so a permanently-unreachable subscription doesn't
+ * retry forever.
+ */
+export async function notifyWeeklyRecapReady(params: { userId: string; completedWorkouts: number; points: number }): Promise<void> {
+  if (!isPushConfigured()) return;
+  try {
+    const deliverable = await shouldDeliverPush(params.userId, 'wochenzusammenfassung');
+    if (!deliverable) return;
+
+    const admin = createAdminClient();
+    const { data: subs } = await admin.from('push_subscriptions').select('id, endpoint, p256dh, auth').eq('user_id', params.userId);
+    if (!subs || subs.length === 0) return;
+
+    ensureVapidConfigured();
+    const body =
+      params.completedWorkouts > 0
+        ? `${params.completedWorkouts} Trainings · ${params.points} Punkte letzte Woche. Dein Rückblick ist da.`
+        : 'Dein Wochenrückblick ist da.';
+    const payload = JSON.stringify({
+      title: 'METRO Fit Team',
+      body,
+      url: '/profil/rueckblick',
+      tag: 'weekly-recap',
+    });
+    await deliver(admin, subs as PushSub[], payload);
+  } catch {
+    // never surface push failures
   }
 }

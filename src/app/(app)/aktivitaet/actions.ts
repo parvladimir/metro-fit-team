@@ -3,13 +3,36 @@
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { createClient } from '@/lib/supabase/server';
-import { requireAuthUser, getPrimaryTeamMembership } from '@/lib/data/profile';
+import { requireAuthUser, getCurrentProfile, getPrimaryTeamMembership } from '@/lib/data/profile';
 import { parseDuration } from '@/lib/workout-metrics';
 import { buildSetEdit, localDateString, shiftByDays, type SetValues } from '@/lib/set-input';
 import { setLocalTimeOfDay } from '@/lib/date';
 import { normalizeExerciseType } from '@/lib/exercise-types';
 import { hasTargets, targetsFromRow } from '@/lib/plan-targets';
+import { refreshWeeklyRecapIfExists } from '@/lib/data/weekly-recap';
 import type { ActivityType, ExerciseType, SetMetrics } from '@/types/database';
+
+/** A workout correction may move it into a different week, or the week it's
+ * already in may have been recapped — refresh whichever week(s) already
+ * have a recap, in place. Never allowed to break the action it's called
+ * from: a recap refresh is a nice-to-have, not the thing the user asked to
+ * do. */
+async function refreshAffectedRecaps(teamId: string | null, dates: (Date | null)[]) {
+  try {
+    const profile = await getCurrentProfile();
+    if (!profile) return;
+    const seen = new Set<string>();
+    for (const d of dates) {
+      if (!d) continue;
+      const key = d.toISOString().slice(0, 10);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      await refreshWeeklyRecapIfExists(profile, teamId, d);
+    }
+  } catch {
+    // never let a recap refresh break the workout action it's attached to
+  }
+}
 
 export async function createWorkoutAction(formData: FormData) {
   const user = await requireAuthUser();
@@ -368,7 +391,7 @@ export async function updateWorkoutAction(_prev: EditWorkoutState, formData: For
 
   const { data: workout } = await supabase
     .from('workouts')
-    .select('id, user_id, status, finished_at')
+    .select('id, user_id, team_id, status, finished_at')
     .eq('id', workoutId)
     .eq('user_id', user.id)
     .maybeSingle();
@@ -441,6 +464,8 @@ export async function updateWorkoutAction(_prev: EditWorkoutState, formData: For
     return { error: 'Training konnte nicht gespeichert werden.' };
   }
 
+  await refreshAffectedRecaps(workout.team_id, [new Date(workout.finished_at), finishedAt]);
+
   revalidatePath('/aktivitaet');
   revalidatePath('/team');
   redirect(`/aktivitaet/training/${workoutId}/zusammenfassung`);
@@ -451,10 +476,21 @@ export async function updateWorkoutAction(_prev: EditWorkoutState, formData: For
  * entries, score effects, challenge progress. */
 export async function deleteWorkoutAction(workoutId: string) {
   if (!/^[0-9a-f-]{36}$/i.test(workoutId)) return;
-  await requireAuthUser();
+  const user = await requireAuthUser();
   const supabase = await createClient();
+
+  const { data: workout } = await supabase
+    .from('workouts')
+    .select('team_id, finished_at')
+    .eq('id', workoutId)
+    .eq('user_id', user.id)
+    .maybeSingle();
+
   const { error } = await supabase.rpc('delete_own_workout', { p_workout_id: workoutId });
   if (error) throw new Error('Training konnte nicht gelöscht werden.');
+
+  if (workout?.finished_at) await refreshAffectedRecaps(workout.team_id, [new Date(workout.finished_at)]);
+
   revalidatePath('/aktivitaet');
   revalidatePath('/team');
   revalidatePath('/team/chat');
