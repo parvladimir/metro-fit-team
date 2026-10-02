@@ -10,7 +10,7 @@
  *
  * against a project whose migrations + seed.sql have already been applied.
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { addDaysToKey, localDateTimeToUtc } from '@/lib/date';
 
@@ -3505,6 +3505,529 @@ describeIntegration('Row Level Security', () => {
 
         await admin.from('teams').delete().eq('id', team!.id);
         await admin.auth.admin.deleteUser(E.id).catch(() => undefined);
+      });
+    });
+  });
+
+  describe('Fewer taps A: earlier results, replacing and postponing an exercise (0049)', () => {
+    let F1: typeof userB; // trains
+    let F2: typeof userB; // another user
+    let fTeamId: string;
+    const ex = { bench: '', benchTwin: '', dumbbell: '', run: '', plank: '', f2Private: '', f1Private: '' };
+    const createdExercises: string[] = [];
+
+    async function createExercise(name: string, type = 'strength', extra: Record<string, unknown> = {}) {
+      const { data, error } = await admin.from('exercises').insert({ name, muscle_group: 'chest', exercise_type: type, ...extra }).select('id').single();
+      if (error) throw error;
+      createdExercises.push(data!.id);
+      return data!.id as string;
+    }
+
+    beforeAll(async () => {
+      const { data: team } = await admin.from('teams').insert({ name: `Fewer Taps A ${Date.now()}`, slug: `fewer-taps-a-${Date.now()}` }).select('id').single();
+      fTeamId = team!.id;
+      F1 = await createTestUser('f-owner');
+      F2 = await createTestUser('f-other');
+      await admin.from('team_members').insert([
+        { team_id: fTeamId, user_id: F1.id, role: 'member' },
+        { team_id: fTeamId, user_id: F2.id, role: 'member' },
+      ]);
+      ex.bench = await createExercise('FT Bankdrücken');
+      ex.benchTwin = await createExercise('FT Bankdrücken'); // same name, different identity
+      ex.dumbbell = await createExercise('FT Kurzhantel-Bankdrücken');
+      ex.run = await createExercise('FT Laufen', 'cardio_distance', { muscle_group: 'cardio' });
+      ex.plank = await createExercise('FT Plank', 'bodyweight');
+      ex.f2Private = await createExercise('FT F2 privat', 'strength', { owner_user_id: F2.id, is_custom: true, visibility: 'private', created_by: F2.id });
+      ex.f1Private = await createExercise('FT F1 privat', 'strength', { owner_user_id: F1.id, is_custom: true, visibility: 'private', created_by: F1.id });
+    });
+
+    afterEach(async () => {
+      await admin.from('workouts').delete().in('user_id', [F1.id, F2.id]);
+    });
+
+    afterAll(async () => {
+      await admin.from('workouts').delete().in('user_id', [F1.id, F2.id]);
+      for (const u of [F1, F2]) await admin.auth.admin.deleteUser(u.id).catch(() => undefined); // takes their plans and templates along
+      await admin.from('exercises').delete().in('id', createdExercises);
+      await admin.from('teams').delete().eq('id', fTeamId);
+    });
+
+    type SetSpec = { weight?: number | null; reps?: number | null; km?: number | null; secs?: number | null; metrics?: Record<string, number>; completed?: boolean };
+    type RowSpec = { exerciseId: string; position?: number; planned?: unknown; sets?: SetSpec[] };
+
+    async function makeWorkout(user: typeof F1, o: { status?: string; daysAgo?: number; paused?: boolean; teamId?: string | null; withFinishedAt?: boolean; rows?: RowSpec[] } = {}) {
+      const status = o.status ?? 'abgeschlossen';
+      const finished = new Date(Date.now() - (o.daysAgo ?? (status === 'abgeschlossen' ? 3 : 0)) * 86_400_000);
+      const row: Record<string, unknown> = {
+        user_id: user.id,
+        team_id: o.teamId ?? null,
+        activity_type: 'krafttraining',
+        status,
+        title: 'FT',
+        started_at: new Date(finished.getTime() - 3_600_000).toISOString(),
+      };
+      if (status === 'abgeschlossen') {
+        row.finished_at = finished.toISOString();
+        row.duration_seconds = 3600;
+      } else if (o.withFinishedAt) {
+        row.finished_at = finished.toISOString(); // not realistic, but the status rule must not depend on it
+      }
+      if (o.paused) row.paused_at = new Date().toISOString();
+      const { data: w, error } = await admin.from('workouts').insert(row).select('id').single();
+      if (error) throw error;
+      const rows: { id: string; exerciseId: string }[] = [];
+      for (const [i, r] of (o.rows ?? []).entries()) {
+        const { data: we, error: weErr } = await admin
+          .from('workout_exercises')
+          .insert({ workout_id: w!.id, exercise_id: r.exerciseId, position: r.position ?? i, planned: r.planned ?? null })
+          .select('id')
+          .single();
+        if (weErr) throw weErr;
+        rows.push({ id: we!.id, exerciseId: r.exerciseId });
+        for (const [j, s] of (r.sets ?? []).entries()) {
+          const { error: sErr } = await admin.from('workout_sets').insert({
+            workout_exercise_id: we!.id,
+            set_number: j + 1,
+            weight_kg: s.weight ?? null,
+            reps: s.reps ?? null,
+            distance_km: s.km ?? null,
+            duration_seconds: s.secs ?? null,
+            metrics: s.metrics ?? {},
+            completed: s.completed ?? true,
+          });
+          if (sErr) throw sErr;
+        }
+      }
+      return { id: w!.id as string, rows };
+    }
+
+    const last = (u: typeof F1, workoutId: string) => u.client.rpc('get_last_exercise_results', { p_workout_id: workoutId });
+    const history = (u: typeof F1, exerciseId: string, args: Record<string, unknown> = {}) => u.client.rpc('get_exercise_history', { p_exercise_id: exerciseId, ...args });
+    const replace = (u: typeof F1, rowId: string, newExercise: string, newRowId: string = crypto.randomUUID()) =>
+      u.client.rpc('replace_workout_exercise', { p_workout_exercise_id: rowId, p_new_exercise_id: newExercise, p_new_workout_exercise_id: newRowId });
+    const postpone = (u: typeof F1, rowId: string) => u.client.rpc('postpone_workout_exercise', { p_workout_exercise_id: rowId });
+    const rowsOf = async (workoutId: string) =>
+      (await admin.from('workout_exercises').select('id, exercise_id, position, planned, created_at').eq('workout_id', workoutId).order('position').order('created_at').order('id')).data!;
+    const anon = () => createClient(SUPABASE_URL, ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
+
+    describe('earlier results ("Letztes Mal")', () => {
+      it('194. returns the actual sets of the latest COMPLETED session, ordered by when it finished — not by when the row was created', async () => {
+        // The newer session is created first and the older one second: only finished_at may decide.
+        await makeWorkout(F1, { daysAgo: 2, rows: [{ exerciseId: ex.bench, sets: [{ weight: 82.5, reps: 8 }] }] });
+        const older = await makeWorkout(F1, { daysAgo: 9, rows: [{ exerciseId: ex.bench, sets: [{ weight: 80, reps: 10 }, { weight: 80, reps: 9 }, { weight: 75, reps: 8 }] }] });
+        const cur = await makeWorkout(F1, { status: 'laeuft', rows: [{ exerciseId: ex.bench }, { exerciseId: ex.run }] });
+
+        const res = await last(F1, cur.id);
+        expect(res.error).toBeNull();
+        expect(res.data).toHaveLength(1); // the run has no history, and "no history" is simply no row
+        expect(res.data![0].out_exercise_id).toBe(ex.bench);
+        expect(res.data![0].out_sets).toEqual([{ set_number: 1, weight_kg: 82.5, reps: 8, distance_km: null, duration_seconds: null, metrics: {} }]);
+
+        // Without the newer session the older one is the answer, its sets in set order with their real weights.
+        await admin.from('workouts').delete().eq('user_id', F1.id).eq('status', 'abgeschlossen').neq('id', older.id);
+        const again = (await last(F1, cur.id)).data!;
+        expect(again[0].out_workout_id).toBe(older.id);
+        expect(again[0].out_sets.map((s: { set_number: number; weight_kg: number; reps: number }) => [s.set_number, s.weight_kg, s.reps])).toEqual([[1, 80, 10], [2, 80, 9], [3, 75, 8]]);
+      });
+
+      it('195. every exercise gets its own latest session, however long ago it was — there is no "most recent few workouts" window', async () => {
+        await makeWorkout(F1, { daysAgo: 200, rows: [{ exerciseId: ex.bench, sets: [{ weight: 70, reps: 10 }] }] });
+        for (let d = 1; d <= 30; d++) await makeWorkout(F1, { daysAgo: d, rows: [{ exerciseId: ex.run, sets: [{ km: 5, secs: 1800 }] }] });
+        const cur = await makeWorkout(F1, { status: 'laeuft', rows: [{ exerciseId: ex.bench }, { exerciseId: ex.run }] });
+        const res = (await last(F1, cur.id)).data!;
+        expect(res.map((r: { out_exercise_id: string }) => r.out_exercise_id).sort()).toEqual([ex.bench, ex.run].sort());
+        const bench = res.find((r: { out_exercise_id: string }) => r.out_exercise_id === ex.bench);
+        expect(bench.out_sets[0].weight_kg).toBe(70);
+      });
+
+      it('196. exercises are matched by identity, never by name', async () => {
+        await makeWorkout(F1, { daysAgo: 4, rows: [{ exerciseId: ex.benchTwin, sets: [{ weight: 100, reps: 5 }] }] });
+        const cur = await makeWorkout(F1, { status: 'laeuft', rows: [{ exerciseId: ex.bench }] });
+        expect((await last(F1, cur.id)).data).toEqual([]); // same name, different exercise: nothing
+        expect((await history(F1, ex.bench)).data).toEqual([]);
+
+        const planned = await makeWorkout(F1, { status: 'geplant', rows: [{ exerciseId: ex.benchTwin }] });
+        const res = (await last(F1, planned.id)).data!;
+        expect(res).toHaveLength(1); // the twin finds its own session
+        expect(res[0].out_sets[0].weight_kg).toBe(100);
+      });
+
+      it('197. ignores the workout itself, skipped and unfinished workouts, exercise rows without sets and sets that are not completed', async () => {
+        const sets = [{ weight: 60, reps: 12 }];
+        await makeWorkout(F1, { status: 'uebersprungen', daysAgo: 1, withFinishedAt: true, rows: [{ exerciseId: ex.bench, sets }] });
+        await makeWorkout(F1, { status: 'geplant', daysAgo: 1, withFinishedAt: true, rows: [{ exerciseId: ex.bench, sets }] });
+        await makeWorkout(F1, { daysAgo: 1, rows: [{ exerciseId: ex.bench, sets: [] }] }); // completed, but nothing was recorded for the exercise
+        await makeWorkout(F1, { daysAgo: 1, rows: [{ exerciseId: ex.bench, sets: [{ weight: 99, reps: 1, completed: false }] }] });
+        const own = await makeWorkout(F1, { daysAgo: 0, rows: [{ exerciseId: ex.bench, sets: [{ weight: 70, reps: 10 }] }] });
+
+        expect((await last(F1, own.id)).data).toEqual([]); // a workout is never its own "last time"
+
+        const cur = await makeWorkout(F1, { status: 'laeuft', rows: [{ exerciseId: ex.bench }] });
+        const res = (await last(F1, cur.id)).data!;
+        expect(res).toHaveLength(1);
+        expect(res[0].out_workout_id).toBe(own.id); // the only eligible session
+        expect(res[0].out_sets[0].weight_kg).toBe(70);
+      });
+
+      it('198. personal history is not cut off by the team\'s points reset', async () => {
+        await admin.from('team_ranking_rules').upsert({ team_id: fTeamId, points_reset_at: new Date(Date.now() - 86_400_000).toISOString() }, { onConflict: 'team_id' });
+        const old = await makeWorkout(F1, { daysAgo: 30, teamId: fTeamId, rows: [{ exerciseId: ex.bench, sets: [{ weight: 85, reps: 6 }] }] });
+        const cur = await makeWorkout(F1, { status: 'laeuft', rows: [{ exerciseId: ex.bench }] });
+        const res = (await last(F1, cur.id)).data!;
+        expect(res).toHaveLength(1);
+        expect(res[0].out_workout_id).toBe(old.id);
+        expect((await history(F1, ex.bench)).data).toHaveLength(1);
+        await admin.from('team_ranking_rules').update({ points_reset_at: null }).eq('team_id', fTeamId);
+      });
+
+      it('199. with no history the answer is empty (and an unknown workout id is empty too, not an error)', async () => {
+        const cur = await makeWorkout(F1, { status: 'laeuft', rows: [{ exerciseId: ex.bench }, { exerciseId: ex.plank }] });
+        const res = await last(F1, cur.id);
+        expect(res.error).toBeNull();
+        expect(res.data).toEqual([]);
+        expect((await last(F1, crypto.randomUUID())).data).toEqual([]);
+      });
+
+      it('200. nobody else\'s history is reachable: another user gets nothing with the real workout id or the real exercise id; anonymous callers are refused', async () => {
+        await makeWorkout(F1, { daysAgo: 5, rows: [{ exerciseId: ex.bench, sets: [{ weight: 80, reps: 10 }] }] });
+        const f1Cur = await makeWorkout(F1, { status: 'laeuft', rows: [{ exerciseId: ex.bench }] });
+        const f2Cur = await makeWorkout(F2, { status: 'laeuft', rows: [{ exerciseId: ex.bench }] });
+
+        expect((await last(F2, f1Cur.id)).data).toEqual([]); // F1's workout id
+        expect((await last(F2, f2Cur.id)).data).toEqual([]); // F2's own workout with the same exercise: still none of F1's sessions
+        expect((await history(F2, ex.bench)).data).toEqual([]);
+        expect((await history(F1, ex.bench)).data).toHaveLength(1);
+
+        const a = await anon().rpc('get_last_exercise_results', { p_workout_id: f1Cur.id });
+        expect(a.error).not.toBeNull();
+        const b = await anon().rpc('get_exercise_history', { p_exercise_id: ex.bench });
+        expect(b.error).not.toBeNull();
+      });
+
+      it('201. the same exercise twice in one workout stays two instances: "last" returns the later one, history lists both', async () => {
+        await makeWorkout(F1, {
+          daysAgo: 3,
+          rows: [
+            { exerciseId: ex.bench, sets: [{ weight: 60, reps: 12 }] },
+            { exerciseId: ex.dumbbell, sets: [{ weight: 30, reps: 10 }] },
+            { exerciseId: ex.bench, sets: [{ weight: 50, reps: 15 }, { weight: 50, reps: 14 }] },
+          ],
+        });
+        const cur = await makeWorkout(F1, { status: 'laeuft', rows: [{ exerciseId: ex.bench }] });
+        const res = (await last(F1, cur.id)).data!;
+        expect(res).toHaveLength(1);
+        expect(res[0].out_sets.map((s: { weight_kg: number }) => s.weight_kg)).toEqual([50, 50]); // the later instance only — 60 and 50 are never mixed
+
+        const h = (await history(F1, ex.bench)).data!;
+        expect(h).toHaveLength(2);
+        expect(h.map((x: { out_instance_no: number; out_instance_count: number }) => [x.out_instance_no, x.out_instance_count])).toEqual([[1, 2], [2, 2]]);
+        expect(h[0].out_sets).toHaveLength(1);
+        expect(h[1].out_sets).toHaveLength(2);
+      });
+
+      it('202. history lists the most recent sessions first, caps the page, can leave one workout out and pages back from a date', async () => {
+        const ids: string[] = [];
+        for (let d = 1; d <= 7; d++) ids.push((await makeWorkout(F1, { daysAgo: d, rows: [{ exerciseId: ex.bench, sets: [{ weight: 70 + d, reps: 10 }] }] })).id);
+        const weights = (rows: { out_sets: { weight_kg: number }[] }[]) => rows.map((x) => x.out_sets[0]!.weight_kg);
+
+        const page1 = (await history(F1, ex.bench)).data!;
+        expect(weights(page1)).toEqual([71, 72, 73, 74, 75]); // default page of five, newest first
+        const page2 = (await history(F1, ex.bench, { p_before: page1[4].out_performed_at })).data!;
+        expect(weights(page2)).toEqual([76, 77]);
+        expect(weights((await history(F1, ex.bench, { p_exclude_workout_id: ids[0] })).data!)).toEqual([72, 73, 74, 75, 76]);
+        expect((await history(F1, ex.bench, { p_limit: 2 })).data).toHaveLength(2);
+        expect((await history(F1, ex.bench, { p_limit: 0 })).data).toHaveLength(1); // clamped up to one
+        expect((await history(F1, ex.bench, { p_limit: 500 })).data).toHaveLength(7); // clamped to twenty; only seven exist
+      });
+    });
+
+    describe('replacing an exercise in the running workout', () => {
+      it('203. with no recorded sets the replacement takes the same place — in this workout only; plan, template, timer, points and feed are untouched', async () => {
+        const { data: plan } = await admin.from('workout_plans').insert({ user_id: F1.id, name: 'FT Plan' }).select('id').single();
+        const { data: day } = await admin.from('workout_plan_days').insert({ plan_id: plan!.id, weekday: 1, title: 'Brust' }).select('id').single();
+        await admin.from('workout_plan_exercises').insert({ plan_day_id: day!.id, exercise_id: ex.bench, position: 0, target_sets: 3, target_reps: 10 });
+        const { data: tpl } = await admin.from('plan_templates').insert({ user_id: F1.id, name: 'FT Vorlage' }).select('id').single();
+        await admin.from('plan_template_items').insert({ template_id: tpl!.id, exercise_id: ex.bench, exercise_name: 'FT Bankdrücken', position: 0, target_sets: 3, target_reps: 10 });
+        const planSnapshot = async () =>
+          JSON.stringify([
+            (await admin.from('workout_plan_exercises').select('*').eq('plan_day_id', day!.id)).data,
+            (await admin.from('plan_template_items').select('*').eq('template_id', tpl!.id)).data,
+          ]);
+        const plansBefore = await planSnapshot();
+
+        const w = await makeWorkout(F1, {
+          status: 'laeuft',
+          teamId: fTeamId,
+          rows: [{ exerciseId: ex.run }, { exerciseId: ex.bench, planned: { sets: 3, reps: 10, weightKg: 80 } }, { exerciseId: ex.plank }],
+        });
+        const effects = async () => ({
+          workout: (await admin.from('workouts').select('status, started_at, paused_at, paused_seconds, updated_at').eq('id', w.id).single()).data,
+          messages: (await admin.from('messages').select('id', { count: 'exact', head: true }).eq('team_id', fTeamId)).count,
+          feed: (await admin.from('activity_feed').select('id', { count: 'exact', head: true }).eq('team_id', fTeamId)).count,
+          audit: (await admin.from('audit_events').select('id', { count: 'exact', head: true }).eq('team_id', fTeamId)).count,
+          points: (await admin.from('fitness_score_events').select('id', { count: 'exact', head: true }).eq('user_id', F1.id)).count,
+          notifications: (await admin.from('notifications').select('id', { count: 'exact', head: true }).eq('user_id', F1.id)).count,
+        });
+        const before = await effects();
+
+        const newId = crypto.randomUUID();
+        const res = await replace(F1, w.rows[1]!.id, ex.dumbbell, newId);
+        expect(res.error).toBeNull();
+        expect(res.data![0]).toEqual({ out_mode: 'replaced', out_workout_exercise_id: newId, out_removed_workout_exercise_id: w.rows[1]!.id, out_replayed: false });
+
+        const rows = await rowsOf(w.id);
+        expect(rows.map((r) => [r.exercise_id, r.position])).toEqual([[ex.run, 0], [ex.dumbbell, 1], [ex.plank, 2]]);
+        expect(rows[1]!.id).toBe(newId);
+        expect(rows[1]!.planned).toBeNull(); // the old exercise's targets are not carried over to another movement
+        expect(await planSnapshot()).toBe(plansBefore);
+        expect(await effects()).toEqual(before);
+      });
+
+      it('204. with recorded sets the original keeps them, unchanged, and the replacement is added as its own block right after it', async () => {
+        const w = await makeWorkout(F1, {
+          status: 'laeuft',
+          rows: [
+            { exerciseId: ex.bench, planned: { sets: 3, reps: 10 }, sets: [{ weight: 80, reps: 10 }, { weight: 80, reps: 9 }] },
+            { exerciseId: ex.plank },
+          ],
+        });
+        const setsBefore = (await admin.from('workout_sets').select('*').eq('workout_exercise_id', w.rows[0]!.id).order('set_number')).data;
+        const newId = crypto.randomUUID();
+        const res = await replace(F1, w.rows[0]!.id, ex.dumbbell, newId);
+        expect(res.data![0]).toEqual({ out_mode: 'added', out_workout_exercise_id: newId, out_removed_workout_exercise_id: null, out_replayed: false });
+
+        const rows = await rowsOf(w.id);
+        expect(rows.map((r) => r.exercise_id)).toEqual([ex.bench, ex.dumbbell, ex.plank]);
+        expect(rows.map((r) => r.position)).toEqual([0, 1, 2]);
+        expect(rows[0]!.id).toBe(w.rows[0]!.id);
+        expect(rows[0]!.planned).toEqual({ sets: 3, reps: 10 });
+        expect((await admin.from('workout_sets').select('*').eq('workout_exercise_id', w.rows[0]!.id).order('set_number')).data).toEqual(setsBefore);
+        expect((await admin.from('workout_sets').select('id').eq('workout_exercise_id', newId)).data).toEqual([]); // nothing is logged automatically
+      });
+
+      it('205. a repeated request (double tap, lost response) is reported again and never applied twice — also when two arrive together; the id cannot be taken over', async () => {
+        const w = await makeWorkout(F1, { status: 'laeuft', rows: [{ exerciseId: ex.bench }, { exerciseId: ex.plank }] });
+        const newId = crypto.randomUUID();
+        const first = await replace(F1, w.rows[0]!.id, ex.dumbbell, newId);
+        expect(first.data![0]).toMatchObject({ out_mode: 'replaced', out_replayed: false });
+        const second = await replace(F1, w.rows[0]!.id, ex.dumbbell, newId); // the original row is gone by now
+        expect(second.error).toBeNull();
+        expect(second.data![0]).toEqual({ out_mode: 'replaced', out_workout_exercise_id: newId, out_removed_workout_exercise_id: w.rows[0]!.id, out_replayed: true });
+        expect(await rowsOf(w.id)).toHaveLength(2);
+        expect((await replace(F1, w.rows[0]!.id, ex.run, newId)).error?.message).toContain('invalid_request'); // same id, different exercise: not a replay
+
+        await admin.from('workouts').delete().eq('id', w.id); // one running workout per user
+        const w2 = await makeWorkout(F1, { status: 'laeuft', rows: [{ exerciseId: ex.bench, sets: [{ weight: 80, reps: 10 }] }, { exerciseId: ex.plank }] });
+        const id2 = crypto.randomUUID();
+        const [a, b] = await Promise.all([replace(F1, w2.rows[0]!.id, ex.dumbbell, id2), replace(F1, w2.rows[0]!.id, ex.dumbbell, id2)]);
+        expect(a.error).toBeNull();
+        expect(b.error).toBeNull();
+        expect([a.data![0].out_replayed, b.data![0].out_replayed].sort()).toEqual([false, true]);
+        expect((await rowsOf(w2.id)).filter((r) => r.id === id2)).toHaveLength(1);
+
+        const f2 = await makeWorkout(F2, { status: 'laeuft', rows: [{ exerciseId: ex.bench }] });
+        expect((await replace(F2, f2.rows[0]!.id, ex.dumbbell, id2)).error?.message).toContain('invalid_request'); // the id belongs to another user's row
+        expect((await rowsOf(f2.id)).map((r) => r.exercise_id)).toEqual([ex.bench]);
+      });
+
+      it('206. the replacement must be an exercise the caller may use — someone else\'s private exercise and an unknown id are refused, their own private one is fine', async () => {
+        const w = await makeWorkout(F1, { status: 'laeuft', rows: [{ exerciseId: ex.bench }, { exerciseId: ex.plank }] });
+        const before = await rowsOf(w.id);
+        expect((await replace(F1, w.rows[0]!.id, ex.f2Private)).error?.message).toContain('exercise_not_accessible');
+        expect((await replace(F1, w.rows[0]!.id, crypto.randomUUID())).error?.message).toContain('exercise_not_accessible');
+        expect(await rowsOf(w.id)).toEqual(before);
+        expect((await replace(F1, w.rows[0]!.id, ex.f1Private)).error).toBeNull();
+      });
+
+      it('207. a foreign or unknown row is simply "not found" — the same answer either way, nothing changes, anonymous callers are refused', async () => {
+        const w = await makeWorkout(F1, { status: 'laeuft', rows: [{ exerciseId: ex.bench, sets: [{ weight: 80, reps: 10 }] }, { exerciseId: ex.plank }] });
+        const before = await rowsOf(w.id);
+        for (const call of [
+          () => replace(F2, w.rows[0]!.id, ex.dumbbell),
+          () => replace(F1, crypto.randomUUID(), ex.dumbbell),
+          () => postpone(F2, w.rows[0]!.id),
+          () => postpone(F1, crypto.randomUUID()),
+        ]) {
+          expect((await call()).error?.message).toContain('exercise_not_found');
+        }
+        expect(await rowsOf(w.id)).toEqual(before);
+        expect((await anon().rpc('replace_workout_exercise', { p_workout_exercise_id: w.rows[0]!.id, p_new_exercise_id: ex.dumbbell, p_new_workout_exercise_id: crypto.randomUUID() })).error).not.toBeNull();
+        expect((await anon().rpc('postpone_workout_exercise', { p_workout_exercise_id: w.rows[0]!.id })).error).not.toBeNull();
+      });
+
+      it('208. only a running workout can be changed: finished, skipped and planned ones are refused, a paused one is fine', async () => {
+        for (const status of ['abgeschlossen', 'uebersprungen', 'geplant']) {
+          const w = await makeWorkout(F1, { status, rows: [{ exerciseId: ex.bench }, { exerciseId: ex.plank }] });
+          expect((await replace(F1, w.rows[0]!.id, ex.dumbbell)).error?.message, status).toContain('workout_not_active');
+          expect((await postpone(F1, w.rows[0]!.id)).error?.message, status).toContain('workout_not_active');
+          expect((await rowsOf(w.id)).map((r) => r.exercise_id), status).toEqual([ex.bench, ex.plank]);
+        }
+        const paused = await makeWorkout(F1, { status: 'laeuft', paused: true, rows: [{ exerciseId: ex.bench }, { exerciseId: ex.plank }] });
+        expect((await postpone(F1, paused.rows[0]!.id)).error).toBeNull();
+        expect((await replace(F1, paused.rows[1]!.id, ex.run)).error).toBeNull();
+      });
+
+      it('209. replacing an exercise with itself is refused', async () => {
+        const w = await makeWorkout(F1, { status: 'laeuft', rows: [{ exerciseId: ex.bench }] });
+        expect((await replace(F1, w.rows[0]!.id, ex.bench)).error?.message).toContain('same_exercise');
+        expect((await rowsOf(w.id)).map((r) => r.id)).toEqual([w.rows[0]!.id]);
+      });
+
+      it('210. a recorded set can never be moved to another exercise, and a row with sets cannot change its exercise — not even by a direct request or the service role', async () => {
+        const w = await makeWorkout(F1, { status: 'laeuft', rows: [{ exerciseId: ex.bench, sets: [{ weight: 80, reps: 10 }] }, { exerciseId: ex.dumbbell }] });
+        const relabel = await F1.client.from('workout_exercises').update({ exercise_id: ex.dumbbell }).eq('id', w.rows[0]!.id);
+        expect(relabel.error?.message).toContain('exercise_has_recorded_sets');
+        const move = await F1.client.from('workout_sets').update({ workout_exercise_id: w.rows[1]!.id }).eq('workout_exercise_id', w.rows[0]!.id);
+        expect(move.error?.message).toContain('set_parent_is_fixed');
+        expect((await admin.from('workout_exercises').update({ exercise_id: ex.dumbbell }).eq('id', w.rows[0]!.id)).error?.message).toContain('exercise_has_recorded_sets');
+        expect((await admin.from('workout_sets').update({ workout_exercise_id: w.rows[1]!.id }).eq('workout_exercise_id', w.rows[0]!.id)).error?.message).toContain('set_parent_is_fixed');
+        // The guard protects recorded results only: a row without sets keeps working as before.
+        expect((await F1.client.from('workout_exercises').update({ exercise_id: ex.run }).eq('id', w.rows[1]!.id)).error).toBeNull();
+        // A set's own values stay editable (the workout editor relies on it).
+        expect((await F1.client.from('workout_sets').update({ weight_kg: 82.5 }).eq('workout_exercise_id', w.rows[0]!.id)).error).toBeNull();
+        expect((await rowsOf(w.id)).find((r) => r.id === w.rows[0]!.id)!.exercise_id).toBe(ex.bench);
+      });
+
+      it('211. a set saved at the same moment as a replacement is never relabelled: the original keeps it, or the late save is refused', async () => {
+        for (let round = 0; round < 8; round++) {
+          const w = await makeWorkout(F1, { status: 'laeuft', rows: [{ exerciseId: ex.bench }, { exerciseId: ex.plank }] });
+          const original = w.rows[0]!.id;
+          const newId = crypto.randomUUID();
+          const [rep, save] = await Promise.all([
+            replace(F1, original, ex.dumbbell, newId),
+            F1.client.from('workout_sets').insert({ workout_exercise_id: original, set_number: 1, weight_kg: 80, reps: 10 }),
+          ]);
+          expect(rep.error).toBeNull();
+          const rows = await rowsOf(w.id);
+          const landed = (await admin.from('workout_sets').select('id').eq('workout_exercise_id', original)).data!;
+          if (landed.length === 1) {
+            expect(save.error).toBeNull(); // the save won: the original and its set stay, the replacement comes after
+            expect(rep.data![0].out_mode).toBe('added');
+            expect(rows.map((r) => r.exercise_id)).toEqual([ex.bench, ex.dumbbell, ex.plank]);
+            expect(rows.find((r) => r.id === original)!.exercise_id).toBe(ex.bench); // the set is still a bench-press set
+          } else {
+            expect(save.error).not.toBeNull(); // the replacement won: the original is gone and the late save was refused
+            expect(rep.data![0].out_mode).toBe('replaced');
+            expect(rows.map((r) => r.exercise_id)).toEqual([ex.dumbbell, ex.plank]);
+            expect((await admin.from('workout_sets').select('id').eq('workout_exercise_id', newId)).data).toEqual([]);
+          }
+          await admin.from('workouts').delete().eq('id', w.id);
+        }
+      });
+
+      it('212. a replacement that races with finishing the workout is either applied before it or refused — never applied to a finished workout', async () => {
+        for (let round = 0; round < 6; round++) {
+          const w = await makeWorkout(F1, { status: 'laeuft', rows: [{ exerciseId: ex.bench }, { exerciseId: ex.plank }] });
+          const [rep, fin] = await Promise.all([
+            replace(F1, w.rows[0]!.id, ex.dumbbell),
+            F1.client.rpc('finish_own_workout', { p_workout_id: w.id, p_finished_at: new Date().toISOString(), p_duration_seconds: 1800, p_distance_km: null, p_notes: null }),
+          ]);
+          expect(fin.error).toBeNull();
+          const exercises = (await rowsOf(w.id)).map((r) => r.exercise_id);
+          if (rep.error) {
+            expect(rep.error.message).toContain('workout_not_active');
+            expect(exercises).toEqual([ex.bench, ex.plank]); // refused, nothing changed
+          } else {
+            expect(exercises).toEqual([ex.dumbbell, ex.plank]); // applied while the workout was still running
+          }
+          const after = await replace(F1, w.rows[0]!.id, ex.run); // now it is finished for certain
+          expect(after.error).not.toBeNull();
+          await admin.from('workouts').delete().eq('id', w.id);
+        }
+      });
+    });
+
+    describe('postponing an exercise', () => {
+      it('213. moves the exercise behind all others and changes nothing else about it', async () => {
+        const w = await makeWorkout(F1, {
+          status: 'laeuft',
+          rows: [
+            { exerciseId: ex.bench, planned: { sets: 3, reps: 10 }, sets: [{ weight: 80, reps: 10 }] },
+            { exerciseId: ex.dumbbell },
+            { exerciseId: ex.run },
+            { exerciseId: ex.plank },
+          ],
+        });
+        const before = await rowsOf(w.id);
+        const res = await postpone(F1, w.rows[0]!.id);
+        expect(res.data).toEqual([{ out_changed: true }]);
+
+        const after = await rowsOf(w.id);
+        expect(after).toHaveLength(before.length);
+        expect(after.map((r) => r.id)).toEqual([w.rows[1]!.id, w.rows[2]!.id, w.rows[3]!.id, w.rows[0]!.id]);
+        expect(after.map((r) => r.position)).toEqual([0, 1, 2, 3]);
+        expect(after[3]).toMatchObject({ id: before[0]!.id, exercise_id: before[0]!.exercise_id, planned: before[0]!.planned, created_at: before[0]!.created_at });
+        expect((await admin.from('workout_sets').select('weight_kg, reps').eq('workout_exercise_id', w.rows[0]!.id)).data).toEqual([{ weight_kg: 80, reps: 10 }]);
+      });
+
+      it('214. postponing the last exercise, or repeating the request, changes nothing', async () => {
+        const w = await makeWorkout(F1, { status: 'laeuft', rows: [{ exerciseId: ex.bench }, { exerciseId: ex.dumbbell }, { exerciseId: ex.run }] });
+        const before = await rowsOf(w.id);
+        expect((await postpone(F1, w.rows[2]!.id)).data).toEqual([{ out_changed: false }]);
+        expect(await rowsOf(w.id)).toEqual(before);
+
+        expect((await postpone(F1, w.rows[0]!.id)).data).toEqual([{ out_changed: true }]);
+        const once = await rowsOf(w.id);
+        expect((await postpone(F1, w.rows[0]!.id)).data).toEqual([{ out_changed: false }]); // already last now
+        expect(await rowsOf(w.id)).toEqual(once);
+      });
+
+      it('215. older rows that share a position are given a clear order by the next move or replacement', async () => {
+        const w = await makeWorkout(F1, {
+          status: 'laeuft',
+          rows: [{ exerciseId: ex.bench, position: 0 }, { exerciseId: ex.dumbbell, position: 2 }, { exerciseId: ex.run, position: 2 }],
+        });
+        await postpone(F1, w.rows[0]!.id);
+        const moved = await rowsOf(w.id);
+        expect(moved.map((r) => r.position)).toEqual([0, 1, 2]);
+        expect(moved.map((r) => r.id)).toEqual([w.rows[1]!.id, w.rows[2]!.id, w.rows[0]!.id]);
+
+        const x = await makeWorkout(F2, {
+          status: 'laeuft',
+          rows: [{ exerciseId: ex.bench, position: 1 }, { exerciseId: ex.dumbbell, position: 1 }, { exerciseId: ex.run, position: 1 }],
+        });
+        const newId = crypto.randomUUID();
+        await replace(F2, x.rows[1]!.id, ex.plank, newId);
+        const replaced = await rowsOf(x.id);
+        expect(replaced.map((r) => r.position)).toEqual([0, 1, 2]);
+        expect(replaced.map((r) => r.id)).toEqual([x.rows[0]!.id, newId, x.rows[2]!.id]);
+      });
+    });
+
+    describe('side effects and saving sets', () => {
+      it('216. reading history, replacing and postponing leave the timer, the plan, the points and the team feed alone', async () => {
+        const w = await makeWorkout(F1, { status: 'laeuft', teamId: fTeamId, rows: [{ exerciseId: ex.bench }, { exerciseId: ex.dumbbell }, { exerciseId: ex.plank }] });
+        const effects = async () => ({
+          workout: (await admin.from('workouts').select('status, started_at, paused_at, paused_seconds, updated_at, duration_seconds').eq('id', w.id).single()).data,
+          messages: (await admin.from('messages').select('id', { count: 'exact', head: true }).eq('team_id', fTeamId)).count,
+          feed: (await admin.from('activity_feed').select('id', { count: 'exact', head: true }).eq('team_id', fTeamId)).count,
+          audit: (await admin.from('audit_events').select('id', { count: 'exact', head: true }).eq('team_id', fTeamId)).count,
+          points: (await admin.from('fitness_score_events').select('id', { count: 'exact', head: true }).eq('user_id', F1.id)).count,
+          notifications: (await admin.from('notifications').select('id', { count: 'exact', head: true }).eq('user_id', F1.id)).count,
+        });
+        const before = await effects();
+        await last(F1, w.id);
+        await history(F1, ex.bench);
+        await replace(F1, w.rows[1]!.id, ex.run);
+        await postpone(F1, w.rows[0]!.id);
+        expect(await effects()).toEqual(before);
+        await F1.client.rpc('delete_own_workout', { p_workout_id: w.id }); // removes the team event this fixture posted
+      });
+
+      it('217. a set saved with a client-chosen id can be sent again without becoming a second set; nobody else can take over that id', async () => {
+        const w = await makeWorkout(F1, { status: 'laeuft', rows: [{ exerciseId: ex.bench }] });
+        const setId = crypto.randomUUID();
+        const row = (extra: Record<string, unknown> = {}) => ({ id: setId, workout_exercise_id: w.rows[0]!.id, set_number: 1, weight_kg: 80, reps: 10, metrics: {}, ...extra });
+        expect((await F1.client.from('workout_sets').insert(row())).error).toBeNull();
+        const again = await F1.client.from('workout_sets').insert(row({ weight_kg: 999 }));
+        expect(again.error?.code).toBe('23505'); // the retry is recognisable and does not overwrite
+        const stored = (await admin.from('workout_sets').select('weight_kg').eq('workout_exercise_id', w.rows[0]!.id)).data!;
+        expect(stored).toEqual([{ weight_kg: 80 }]);
+
+        const f2 = await makeWorkout(F2, { status: 'laeuft', rows: [{ exerciseId: ex.bench }] });
+        expect((await F2.client.from('workout_sets').insert(row({ workout_exercise_id: f2.rows[0]!.id }))).error).not.toBeNull(); // the id is someone else's
+        expect((await F2.client.from('workout_sets').select('id').eq('id', setId)).data).toEqual([]); // and invisible to them
+        expect((await F2.client.from('workout_sets').insert(row({ id: crypto.randomUUID(), workout_exercise_id: w.rows[0]!.id }))).error).not.toBeNull(); // nor can they write into F1's exercise
       });
     });
   });
